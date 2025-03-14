@@ -1,8 +1,8 @@
-import neighbours
 from schedule import Schedule
+import neighbours
 
 
-def ts_solve(problem):
+def ga_solve(problem):
     schedule: Schedule = None
     neighbours.get_neighbours(schedule)
     pass
