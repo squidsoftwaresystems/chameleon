@@ -1,8 +1,7 @@
-from schedule import Schedule
-import neighbours
+from .neighbours import get_neighbours
+from .schedule import Schedule
 
 
 def ga_solve(problem):
     schedule: Schedule = None
-    neighbours.get_neighbours(schedule)
-    pass
+    get_neighbours(schedule)
