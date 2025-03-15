@@ -8,7 +8,7 @@ class Event(ABC):
     """
     Timestamp (and additional information) of an event at a terminal
     """
-
+    
     time = None
 
 
@@ -16,7 +16,6 @@ class TerminalOpeningEvent(Event):
     """
     Event of terminal starting work in some day
     """
-
     pass
 
 
@@ -24,7 +23,6 @@ class TerminalClosingEvent(Event):
     """
     Event of terminal finishing work in some day
     """
-
     pass
 
 
@@ -32,7 +30,6 @@ class CargoPickupOpenEvent(Event):
     """
     Event signalling beginning of cargo pickup slot
     """
-
     pass
 
 
@@ -40,7 +37,6 @@ class CargoPickupCloseEvent(Event):
     """
     Event signalling ending of cargo pickup slot
     """
-
     pass
 
 
@@ -48,7 +44,6 @@ class CargoDropoffOpenEvent(Event):
     """
     Event signalling beginning of cargo dropoff slot
     """
-
     pass
 
 
@@ -56,7 +51,6 @@ class CargoDropoffCloseEvent(Event):
     """
     Event signalling ending of cargo dropoff slot
     """
-
     pass
 
 
@@ -126,4 +120,3 @@ class Schedule:
         :returns: the number of cargo items delivered under this schedule
         :rtype: int
         """
-        pass

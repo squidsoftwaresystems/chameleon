@@ -5,4 +5,3 @@ from .schedule import Schedule
 def sa_solve(problem):
     schedule: Schedule = Schedule()
     get_neighbours(schedule)
-    pass
