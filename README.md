@@ -21,6 +21,8 @@ The main code is under `src`, code for performance evaluation is under `evaluati
 
 When running and developing code, it is recommended to put the entry points into `evaluation` and only keep logic under `src`. For example, `evaluation/metaheuristic/run_aco.py` might fetch data, and call a method in `src/metaheuristic` to optimise over it.
 
+Please use the tests by running `pytest` and check your python types by running `mypy .`
+
 ### Adding new packages
 1. Add it to `requirements.txt` by putting output of `pip freeze` into `requirements.txt`. On Linux/MacOS, it is easiest to do `pip freeze > requirements.txt`
 2. If you pull and the code has updated `requirements.txt`, you will need to install the new packages: `pip install -r requirements.txt`

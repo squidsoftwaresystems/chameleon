@@ -1,8 +1,8 @@
-import neighbours
-from schedule import Schedule
+from .neighbours import get_neighbours
+from .schedule import Schedule
 
 
 def sa_solve(problem):
-    schedule: Schedule = None
-    neighbours.get_neighbours(schedule)
+    schedule: Schedule = Schedule()
+    get_neighbours(schedule)
     pass
