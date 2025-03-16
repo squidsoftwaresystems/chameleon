@@ -5,6 +5,7 @@ from .schedule import Schedule
 
 def get_neighbours(schedule: Schedule) -> List[Schedule]:
     # Add a route
+    # Allow moving empty truck to different terminal and picking up cargo there
     # When adding a route, consider (some subset of) trucks in-flight to see if some truck in flight can do this delivery instead of a truck already at the terminal
     # Might have to add "snapping points" in that case
 
