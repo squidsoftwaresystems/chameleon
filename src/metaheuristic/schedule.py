@@ -4,8 +4,8 @@ from typing import Dict, List, Tuple, cast
 import numpy as np
 import pandas as pd
 
-from .constants import INVALID_ID, FixedEvent, TruckEvent
-from .unoccupied_windows import UnoccupiedWindows
+from .constants import INVALID_ID, TruckEvent
+from .intervals import Intervals
 
 
 class TruckScheduleChange(ABC):
@@ -73,28 +73,11 @@ class Schedule:
     doesn't violate hard constraints
     """
 
-    fixed_events: pd.DataFrame
-    """
-    A dataframe containing all events that can't be changed
-    Index:
-        pd.DatetimeIndex
-    Columns:
-        Name: event_type,   dtype: int64
-        Name: terminal,     dtype: int64
-        Name: cargo,        dtype: int64,
-        Name: hidden,       dtype: boolean
-
-    Note that terminal, cargo, event_type refer to respective ids
-
-    If an event is hidden, it means that it is accounted for and can be safely ignored when planning routes.
-    For example, if a cargo is delivered, its pickup and dropoff events can be ignored when planning other routes.
-
-    Invariant: cargo can't be delivered to terminal it has been to before
-    """
-
     truck_events: Dict[int, pd.DataFrame]
     """
-    A dict mapping terminal id to a dataframe containing all events that happen to the truck
+    A dict mapping terminal id to a dataframe containing all events that
+    happen to the truck
+
     Index:
         pd.DatetimeIndex
     Columns:
@@ -107,14 +90,14 @@ class Schedule:
     Invariant: cargo can't be delivered to terminal it has been to before
     """
 
-    unoccupied_windows: Dict[int, UnoccupiedWindows]
-    """
-    A mapping of truck ids to the set of intervals at which they are idle
-    Note that trucks corresponding to uncached_trucks may
-    contain stale modification lists, and need to be updated
-    before using them.
-    """
-
+    # unoccupied_windows: Dict[int, UnoccupiedWindows]
+    # """
+    # A mapping of truck ids to the set of intervals at which they are idle
+    # Note that trucks corresponding to uncached_trucks may
+    # contain stale modification lists, and need to be updated
+    # before using them.
+    # """
+    #
     possible_changes: Dict[int, List[TruckScheduleChange]]
     """
     A map of trucks to modifications that can be made to their schedule.
@@ -126,7 +109,8 @@ class Schedule:
     # TODO: does it make sense to cache on both truck and terminal?
     uncached_trucks: List[int]
     """
-    A list of trucks for which possible_changes and unoccupied_windows might be stale
+    A list of trucks for which possible_changes
+    might be stale
     """
 
     # TODO: allow multiple legs of transport per cargo
@@ -137,32 +121,45 @@ class Schedule:
     A list of pieces of cargo that need to be transported
     """
 
-    terminal_open_intervals: Dict[int, pd.DataFrame]
+    terminal_open_intervals: Intervals
     """
-    A dict mapping terminal ids to Dataframe of intervals in format of 
-    OccupiedWindows.create_intervals, describing when each terminal is open
+    Intervals of terminal opining times, keeping track of terminals
+    """
+
+    terminal_cargo_pickup_intervals: Intervals
+    """
+    Intervals of cargo pickup, keeping track of terminals and cargo
+    """
+
+    terminal_cargo_dropoff_intervals: Intervals
+    """
+    Intervals of cargo dropoff, keeping track of terminals and cargo
     """
 
     def __init__(
-        self, terminals: pd.DataFrame, trucks: pd.DataFrame, transports: pd.DataFrame
+        self,
+        terminal_data: pd.DataFrame,
+        truck_data: pd.DataFrame,
+        transport_data: pd.DataFrame,
     ):
         """
         Creates a blank schedule, given dataframes for data
 
-        :param terminals: dataframe on terminals
+        :param terminal_data: dataframe on terminals
             Index:
                 pd.Index, dtype=int64: id of the terminal
             Columns:
                 Name: opening_time,     dtype: datatime64[ns], in minutes
                 Name: closing_time,     dtype: datatime64[ns], in minutes
 
-        :param trucks: dataframe on trucks
+        :param truck_data: dataframe on trucks
             Index:
                 pd.Index, dtype=int64: id of the truck
             Columns:
-                Name: starting_terminal,     dtype: int64      terminal where truck starts at the beginning of the day
+                Name: starting_terminal,     dtype: int64      terminal where
+                truck starts at the beginning of the day
 
-        :param transports: dataframe on transports
+        :param transport_data: dataframe on transports
             Index:
                 pd.Index, dtype=int64: id of the transports (one leg of the journey)
             Columns:
@@ -176,32 +173,12 @@ class Schedule:
                 Name: travel_duration,      dtype: timedelta64[ns]
         """
 
-        self.transports = transports
-
-        # Record the data corresponding to each terminal in the same order
-        fixed_event_timestamps: List[pd.Timestamp] = []
-        fixed_event_event_types: List[int] = []
-        fixed_event_terminals: List[int] = []
-        fixed_event_cargo: List[int] = []
-        fixed_event_hidden: List[bool] = []
+        self.transports = transport_data
 
         truck_timestamps: Dict[int, List[pd.Timestamp]] = {}
         truck_event_types: Dict[int, List[int]] = {}
         truck_terminal: Dict[int, List[int]] = {}
         truck_cargo: Dict[int, List[int]] = {}
-
-        def add_fixed_event(
-            terminal: int,
-            timestamp: pd.Timestamp,
-            event_type: int,
-            cargo: int = INVALID_ID,
-            hidden: bool = False,
-        ):
-            fixed_event_timestamps.append(timestamp)
-            fixed_event_event_types.append(event_type)
-            fixed_event_terminals.append(terminal)
-            fixed_event_cargo.append(cargo)
-            fixed_event_hidden.append(hidden)
 
         def add_truck_event(
             truck: int,
@@ -216,19 +193,20 @@ class Schedule:
             truck_cargo[truck].append(cargo)
 
         # Add terminal opening and closing times
-        for terminal, row in terminals.iterrows():
-            terminal = cast(int, terminal)
+        terminal_open_intervals = [
+            (row["opening_time"], row["closing_time"], [terminal])
+            for terminal, row in terminal_data.iterrows()
+        ]
+        self.terminal_open_intervals = Intervals.from_list(
+            terminal_open_intervals, column_names=["terminal"]
+        )
 
-            add_fixed_event(terminal, row["opening_time"], FixedEvent.TERMINAL_OPEN)
-            add_fixed_event(terminal, row["closing_time"], FixedEvent.TERMINAL_CLOSE)
-
-        self.possible_changes = {}
-        self.unoccupied_windows = {}
-        self.uncached_trucks = []
         # Specify where trucks start their working days
-        for truck, row in trucks.iterrows():
-            # TODO: find a way to consider each transport once among all trucks,
-            # despite different driver working times.
+        self.possible_changes = {}
+        self.uncached_trucks = []
+        for truck, row in truck_data.iterrows():
+            # TODO: find a way to consider each transport once
+            # among all trucks, despite different driver working times.
             truck = cast(int, truck)
 
             truck_timestamps[truck] = []
@@ -241,7 +219,8 @@ class Schedule:
             # Add a dummy event to specify starting location
             starting_terminal: int = row["starting_terminal"]
             opening_time = cast(
-                pd.Timestamp, terminals.loc[starting_terminal, "opening_time"]
+                pd.Timestamp,
+                terminal_data.loc[starting_terminal, "opening_time"],
             )
 
             # Trucks become available at terminal at this time
@@ -259,58 +238,8 @@ class Schedule:
                 starting_terminal,
             )
 
-        # When can cargo be moved?
-        for transport, row in transports.iterrows():
-            transport = cast(int, transport)
-
-            # Add a dummy event to specify starting location
-            cargo: int = row["cargo"]
-            from_terminal: int = row["from_terminal"]
-            to_terminal: int = row["to_terminal"]
-            pickup_open_time: pd.Timestamp = row["pickup_open_time"]
-            pickup_close_time: pd.Timestamp = row["pickup_close_time"]
-            dropoff_open_time: pd.Timestamp = row["dropoff_open_time"]
-            dropoff_close_time: pd.Timestamp = row["dropoff_close_time"]
-
-            # Add events for pickup and dropoff slots
-            add_fixed_event(
-                from_terminal,
-                pickup_open_time,
-                FixedEvent.PICKUP_OPEN,
-                cargo,
-            )
-            add_fixed_event(
-                from_terminal,
-                pickup_close_time,
-                FixedEvent.PICKUP_CLOSE,
-                cargo,
-            )
-            add_fixed_event(
-                to_terminal,
-                dropoff_open_time,
-                FixedEvent.DROPOFF_OPEN,
-                cargo,
-            )
-            add_fixed_event(
-                to_terminal,
-                dropoff_close_time,
-                FixedEvent.DROPOFF_CLOSE,
-                cargo,
-            )
-
-        # Create the dataframes, sort them by timestamp
-        self.fixed_events = pd.DataFrame(
-            data={
-                "event_type": fixed_event_event_types,
-                "terminal": fixed_event_terminals,
-                "cargo": fixed_event_cargo,
-                "hidden": fixed_event_hidden,
-            },
-            index=fixed_event_timestamps,
-        ).sort_index()
-
         self.truck_events = {}
-        for truck, _ in trucks.iterrows():
+        for truck, _ in truck_data.iterrows():
             truck = cast(int, truck)
             df = pd.DataFrame(
                 data={
@@ -323,15 +252,44 @@ class Schedule:
 
             self.truck_events[truck] = df
 
-        # For each terminal, store its opening times
-        self.terminal_open_intervals = {}
-        for terminal, row in terminals.iterrows():
-            terminal = cast(int, terminal)
-            self.terminal_open_intervals[terminal] = UnoccupiedWindows.create_intervals(
-                self.fixed_events[self.fixed_events["terminal"] == terminal],
-                FixedEvent.TERMINAL_OPEN,
-                FixedEvent.TERMINAL_CLOSE,
+        # Map of terminals to list of pickup slots in form
+        # (start_time, end_time, cargo_id)
+        terminal_pickups: List[
+            Tuple[pd.Timestamp, pd.Timestamp, List[int]]
+        ] = []
+        terminal_dropoffs: List[
+            Tuple[pd.Timestamp, pd.Timestamp, List[int]]
+        ] = []
+
+        # When can cargo be moved?
+        for transport, row in transport_data.iterrows():
+            transport = cast(int, transport)
+
+            # Add a dummy event to specify starting location
+            cargo: int = row["cargo"]
+            from_terminal: int = row["from_terminal"]
+            to_terminal: int = row["to_terminal"]
+            pickup_open_time: pd.Timestamp = row["pickup_open_time"]
+            pickup_close_time: pd.Timestamp = row["pickup_close_time"]
+            dropoff_open_time: pd.Timestamp = row["dropoff_open_time"]
+            dropoff_close_time: pd.Timestamp = row["dropoff_close_time"]
+
+            # Add events for pickup and dropoff slots
+            terminal_pickups.append(
+                (pickup_open_time, pickup_close_time, [from_terminal, cargo])
             )
+            terminal_dropoffs.append(
+                (dropoff_open_time, dropoff_close_time, [to_terminal, cargo])
+            )
+
+        # Create the intervals
+        self.terminal_cargo_pickup_intervals = Intervals.from_list(
+            terminal_pickups, column_names=["terminal", "cargo"]
+        )
+
+        self.terminal_cargo_dropoff_intervals = Intervals.from_list(
+            terminal_dropoffs, column_names=["terminal", "cargo"]
+        )
 
         self.recalculate_possible_changes()
 
@@ -344,12 +302,20 @@ class Schedule:
             truck_events = self.truck_events[truck]
 
             # Find intervals between deliveries
-            unoccupied_windows = UnoccupiedWindows(truck_events)
+            unoccupied_windows = Intervals.from_dataframe(
+                truck_events,
+                TruckEvent.DELIVERY_END,
+                TruckEvent.DELIVERY_START,
+                cols_to_keep=["terminal"],
+            )
 
             # Enforce that deliveries can occur while terminal is working
-            unoccupied_windows.intersect_on_terminals(self.terminal_open_intervals)
-
-            self.unoccupied_windows[truck] = unoccupied_windows
+            unoccupied_windows = unoccupied_windows.intersect_on_column(
+                self.terminal_open_intervals,
+                column="terminal",
+                self_cols_to_keep=[],
+                other_cols_to_keep=["terminal"],
+            )
 
     # TODO: also take expired deliveries into account when
     # evaluating a schedule
@@ -365,18 +331,8 @@ class Schedule:
     def __repr__(self):
         out = "Schedule:\n\nTerminals:\n\n"
 
-        for terminal in np.sort(self.fixed_events["terminal"].unique()):
-            out += "-------\n"
-            out += f"Terminal {terminal}:\nEvents:\n"
-            events = self.fixed_events[self.fixed_events["terminal"] == terminal].copy()
-
-            # Replace event type numbers with enum names
-            events["event_type"] = events["event_type"].apply(
-                lambda x: FixedEvent(x).name
-            )
-            out += repr(events) + "\n"
-            out += "Opening times:\n"
-            out += repr(self.terminal_open_intervals[terminal]) + "\n\n"
+        out += "Opening times:\n"
+        out += repr(self.terminal_open_intervals) + "\n\n"
 
         out += "Truck events:\n\n"
 
@@ -390,10 +346,10 @@ class Schedule:
             )
             out += repr(events) + "\n"
 
-        out += "Truck unoccupied windows:\n\n"
-        for truck, events in self.truck_events.items():
-            out += "-------\n"
-            out += f"Truck {truck}:\n"
-            out += repr(self.unoccupied_windows[truck]) + "\n\n"
+        # out += "Truck unoccupied windows:\n\n"
+        # for truck, events in self.truck_events.items():
+        #     out += "-------\n"
+        #     out += f"Truck {truck}:\n"
+        #     out += repr(self.unoccupied_windows[truck]) + "\n\n"
 
         return out
