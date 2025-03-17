@@ -27,16 +27,16 @@ def test_schedule_creation():
     # Converts list of hours to pandas datetime index
     def to_time(hours: List[float]) -> pd.DatetimeIndex:
         # convert to seconds
-        seconds = [int(hour * 60 * 60) for hour in hours]
+        seconds = [int(hour * 60) for hour in hours]
 
-        return pd.to_datetime(seconds, origin="unix", unit="s")
+        return pd.to_datetime(seconds, origin="unix", unit="m")
 
     # Converts list of hours to pandas TimedeltaIndex
     def to_timedelta(hours: List[float]) -> pd.TimedeltaIndex:
         # convert to seconds
-        seconds = [int(hour * 60 * 60) for hour in hours]
+        seconds = [int(hour * 60) for hour in hours]
 
-        return pd.to_timedelta(seconds, unit="s")
+        return pd.to_timedelta(seconds, unit="m")
 
     terminals = pd.DataFrame(
         {"opening_time": to_time([7, 8, 9]), "closing_time": to_time([17, 18, 19])}
