@@ -1,5 +1,15 @@
 from collections import defaultdict
-from typing import Any, DefaultDict, Dict, Hashable, List, Self, Tuple, cast
+from typing import (
+    Any,
+    Callable,
+    DefaultDict,
+    Dict,
+    Hashable,
+    List,
+    Self,
+    Tuple,
+    cast,
+)
 
 import pandas as pd
 
@@ -167,6 +177,46 @@ class Intervals:
         out.data = intervals
         return out
 
+    def shift_by(
+        self,
+        by: Callable[[pd.Series], pd.Timedelta],
+        shift_start_time: bool = True,
+        shift_end_time: bool = True,
+    ) -> Self:
+        """
+        Returns a copy of `self`, with each interval
+        shifted by `by(interval)`
+
+        :param by: A mapping of intervals (rows) to shifts
+        :param shift_start_time: whether we should shift start_time
+        :param shift_end_time: whether we should shift end_time
+        """
+        keys_to_shift: List[str] = []
+        if shift_start_time:
+            keys_to_shift.append("start_time")
+        if shift_end_time:
+            keys_to_shift.append("end_time")
+
+        # TODO: deal with these intervals potentially being overlapping
+        # TODO: maybe allow them to overlap
+        def shift(row: pd.Series):
+            row[keys_to_shift] += by(row)
+            return row
+
+        new_data = self.data.apply(shift, axis=1)
+        out = type(self)()
+        out.data = new_data
+        return out
+
+    # def rename_columns(self, mapping: Dict[str, str]) -> Self:
+    #     """
+    #     Return a copy of `self` that renames columns found in `mapping`
+    #     to their mapping.
+    #     """
+    #     out = type(self)()
+    #     out.data = self.data.rename(mapping)
+    #     return out
+    #
     def intersect_on_column(
         self,
         other: Self,
@@ -199,19 +249,17 @@ class Intervals:
             # Select constraint intervals which intersect interval
             # and have relevant data
             constraint_intervals: pd.DataFrame = other.data[
-                other.data[other_col]
-                == data & (other.data["end_time"] >= start_time)
+                (other.data[other_col] == data)
+                & (other.data["end_time"] >= start_time)
                 # index is start_time
                 & (other.data["start_time"] <= end_time)
-            ]
-            constraint_intervals = constraint_intervals[
-                ["start_time", "end_time"] + other_cols_to_keep
-            ].copy()
+                # Then select only the columns we want
+            ][["start_time", "end_time"] + other_cols_to_keep].copy()
 
-            # Add columns from self
-            constraint_intervals[self_cols_to_keep] = interval[
-                self_cols_to_keep
-            ]
+            # Add values from self_cols_to_keep
+            constraint_intervals = constraint_intervals.assign(
+                **{col: interval[col] for col in self_cols_to_keep}
+            )
 
             # We need to clamp constraint_intervals to start
             # and end at appropriate times
@@ -250,6 +298,11 @@ class Intervals:
 
         out = type(self)()
         out.data = pd.concat(new_intervals)
+        return out
+
+    def copy(self) -> Self:
+        out = type(self)()
+        out.data = self.data.copy()
         return out
 
     def __repr__(self):

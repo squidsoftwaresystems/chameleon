@@ -39,7 +39,10 @@ def test_schedule_creation():
         return pd.to_timedelta(seconds, unit="m")
 
     terminals = pd.DataFrame(
-        {"opening_time": to_time([7, 8, 9]), "closing_time": to_time([17, 18, 19])}
+        {
+            "opening_time": to_time([7, 8, 9]),
+            "closing_time": to_time([17, 18, 19]),
+        }
     )
 
     trucks = pd.DataFrame({"starting_terminal": [0, 0, 0, 1, 1, 2]})
@@ -54,7 +57,7 @@ def test_schedule_creation():
             "pickup_close_time":  to_time([8, 14, 14, 19,  19,  20]),
             "dropoff_open_time":  to_time([8, 12, 10, 20,   9,  15]),
             "dropoff_close_time": to_time([9, 14, 12, 22,  10,  17]),
-            "dropoff_close": to_timedelta([1,  1,  1,  2, 0.5, 2.5]),
+            "travel_duration": to_timedelta([1,  1,  1,  2, 0.5, 2.5]),
         }
     )
     # fmt: on

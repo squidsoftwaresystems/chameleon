@@ -137,7 +137,7 @@ class Schedule:
 
     terminal_cargo_pickup_intervals: Intervals
     """
-    Intervals of cargo pickup, keeping track of terminals and cargo
+    Intervals of cargo pickup, keeping track of terminals, cargo and driving_time
     """
 
     terminal_cargo_dropoff_intervals: Intervals
@@ -145,18 +145,17 @@ class Schedule:
     Intervals of cargo dropoff, keeping track of terminals and cargo
     """
 
-    earliest_direct_deliveries: Intervals
+    direct_delivery_start_intervals: Intervals
     """
-    Earliest interval of length transport_data.travel_duration during which
-    a direct delivery of cargo can occur. Keeps track of cargo, from_terminal,
-    to_terminal.
+    List of intervals during which a direct delivery can start, based on
+    satisfying constraints such as pickup and dropoff window and travel time.
+    Keeps track of cargo, from_terminal, to_terminal, driving_time.
     """
 
-    latest_direct_deliveries: Intervals
+    driving_times: Dict[Tuple[int, int], pd.Timedelta]
     """
-    Latest interval of length transport_data.travel_duration during which
-    a direct delivery of cargo can occur. Keeps track of cargo, from_terminal,
-    to_terminal.
+    A mapping of (from_terminal, to_terminal) to length of time needed to drive
+    between them.
     """
 
     def __init__(
@@ -279,9 +278,11 @@ class Schedule:
         # (start_time, end_time, cargo_id)
         terminal_pickups: ListForInterval = []
         terminal_dropoffs: ListForInterval = []
-        earliest_direct_deliveries: ListForInterval = []
-        latest_direct_deliveries: ListForInterval = []
 
+        driving_times: Dict[Tuple[int, int], pd.Timedelta] = {}
+        # How long does it take to drive from "from_terminal" to "to_terminal"
+        # for this cargo?
+        cargo_direct_delivery_times: Dict[int, pd.Timedelta] = {}
         # When can cargo be moved?
         for transport, row in transport_data.iterrows():
             transport = cast(int, transport)
@@ -296,73 +297,68 @@ class Schedule:
             dropoff_close_time: pd.Timestamp = row["dropoff_close_time"]
             travel_duration: pd.Timedelta = row["travel_duration"]
 
+            driving_times[(from_terminal, to_terminal)] = travel_duration
+            # Assume same length in both directions
+            driving_times[(to_terminal, from_terminal)] = travel_duration
+
+            cargo_direct_delivery_times[cargo] = travel_duration
+
             # Add events for pickup and dropoff slots
             terminal_pickups.append(
-                (pickup_open_time, pickup_close_time, [from_terminal, cargo])
+                (
+                    pickup_open_time,
+                    pickup_close_time,
+                    [from_terminal, cargo, travel_duration],
+                )
             )
             terminal_dropoffs.append(
                 (dropoff_open_time, dropoff_close_time, [to_terminal, cargo])
             )
-
-            direct_delivery_added = False
-
-            def add_interval_if_possible(
-                start: pd.Timestamp,
-                end: pd.Timestamp,
-                delivery_list: ListForInterval,
-            ):
-                nonlocal direct_delivery_added
-                if (pickup_open_time <= start <= pickup_close_time) and (
-                    dropoff_open_time <= end <= dropoff_close_time
-                ):
-                    direct_delivery_added = True
-                    delivery_list.append(
-                        (start, end, [cargo, to_terminal, from_terminal])
-                    )
-
-            # Earliest delivery either starts when pickup opens
-            # or ends when dropoff opens
-            add_interval_if_possible(
-                pickup_open_time,
-                pickup_open_time + travel_duration,
-                earliest_direct_deliveries,
-            )
-            add_interval_if_possible(
-                dropoff_open_time - travel_duration,
-                dropoff_open_time,
-                earliest_direct_deliveries,
-            )
-            # Latest delivery either starts when pickup closes
-            # or ends when dropoff closes
-            add_interval_if_possible(
-                pickup_close_time,
-                pickup_close_time + travel_duration,
-                latest_direct_deliveries,
-            )
-            add_interval_if_possible(
-                dropoff_close_time - travel_duration,
-                dropoff_close_time,
-                latest_direct_deliveries,
-            )
-
-            if not direct_delivery_added:
-                warnings.warn(f"Cargo {cargo} can not be delivered directly.")
-
         # Create the intervals
         self.terminal_cargo_pickup_intervals = Intervals.from_list(
-            terminal_pickups, column_names=["terminal", "cargo"]
+            terminal_pickups,
+            column_names=["from_terminal", "cargo", "driving_time"],
         )
         self.terminal_cargo_dropoff_intervals = Intervals.from_list(
-            terminal_dropoffs, column_names=["terminal", "cargo"]
+            terminal_dropoffs, column_names=["to_terminal", "cargo"]
         )
 
-        self.earliest_direct_deliveries = Intervals.from_list(
-            earliest_direct_deliveries,
-            column_names=["cargo", "from_terminal", "to_terminal"],
+        # Restrict them to only work during terminal opening times
+        self.terminal_cargo_pickup_intervals = (
+            self.terminal_cargo_pickup_intervals.intersect_on_column(
+                self.terminal_open_intervals,
+                self_col="from_terminal",
+                other_col="terminal",
+                self_cols_to_keep=["from_terminal", "cargo", "driving_time"],
+                other_cols_to_keep=[],
+            )
         )
-        self.latest_direct_deliveries = Intervals.from_list(
-            latest_direct_deliveries,
-            column_names=["cargo", "from_terminal", "to_terminal"],
+        self.terminal_cargo_dropoff_intervals = (
+            self.terminal_cargo_dropoff_intervals.intersect_on_column(
+                self.terminal_open_intervals,
+                self_col="to_terminal",
+                other_col="terminal",
+                self_cols_to_keep=["to_terminal", "cargo"],
+                other_cols_to_keep=[],
+            )
+        )
+
+        self.driving_times = driving_times
+
+        # Find the intervals during which the delivery can start
+        # and then the truck will arrive while the to_terminal is open
+        self.direct_delivery_start_intervals = (
+            self.terminal_cargo_pickup_intervals.intersect_on_column(
+                other=self.terminal_cargo_dropoff_intervals.shift_by(
+                    lambda interval: -cargo_direct_delivery_times[
+                        interval["cargo"]
+                    ]
+                ),
+                self_col="cargo",
+                other_col="cargo",
+                self_cols_to_keep=["cargo", "from_terminal", "driving_time"],
+                other_cols_to_keep=["to_terminal"],
+            )
         )
 
         self.recalculate_possible_changes()
@@ -394,22 +390,67 @@ class Schedule:
 
             # Try to schedule deliveries during these windows
 
-            # First, try to deliver directly from current terminal to
-            # another terminal and then return without cargo
-            latest_direct_delivery_windows = (
+            # Each interval for a possible start of a direct delivery
+            # is extended to also include completion time; so
+            # each interval I is replaced with the union of intervals
+            # [t, t + delivery time] for each t in I
+            delivery_intervals: Intervals = (
+                self.direct_delivery_start_intervals.shift_by(
+                    lambda interval: interval["driving_time"],
+                    shift_end_time=True,
+                    shift_start_time=False,
+                )
+            )
+
+            delivery_intervals_for_truck: Intervals = (
                 unoccupied_windows.intersect_on_column(
-                    self.latest_direct_deliveries,
+                    delivery_intervals,
                     self_col="terminal",
                     other_col="from_terminal",
                     self_cols_to_keep=[],
                     other_cols_to_keep=[
-                        "cargo",
                         "from_terminal",
                         "to_terminal",
+                        "cargo",
+                        "driving_time",
                     ],
                 )
             )
-            print(latest_direct_delivery_windows)
+
+            # First, try to deliver directly from current terminal to
+            # another terminal and then return without cargo
+            # TODO: is there any circumstance where always picking the earliest
+            # allowed departure time is a worse option?
+            # TODO: check that the truck can still do this delivery.
+            # For example, we could have starting intervals
+            # [            ]    [           ]
+            # which were then expanded to
+            # [                                        ]
+            # And a truck could be available in
+            #                [ ]
+            # Which might give us a false positive
+
+            def has_time_to_deliver_and_return(row: pd.Series) -> bool:
+                start_time = row["start_time"]
+                end_time = row["end_time"]
+                from_terminal = row["from_terminal"]
+                to_terminal = row["to_terminal"]
+                return (
+                    self.driving_times[(from_terminal, to_terminal)]
+                    + self.driving_times[(to_terminal, from_terminal)]
+                    <= end_time - start_time
+                )
+
+            # Pick earliest possible departure time and check
+            # that it is possible to do this
+            short_enough_intervals = delivery_intervals_for_truck.data[
+                delivery_intervals_for_truck.data.apply(
+                    has_time_to_deliver_and_return, axis=1
+                )
+            ]
+
+            print(truck)
+            print(short_enough_intervals)
 
     # TODO: also take expired deliveries into account when
     # evaluating a schedule
@@ -423,15 +464,34 @@ class Schedule:
         pass
 
     def __repr__(self):
+        separator = "-------\n"
+
         out = "Schedule:\n\nTerminals:\n\n"
 
         out += "Opening times:\n"
         out += repr(self.terminal_open_intervals) + "\n\n"
 
+        out += "Possible direct delivery start times:\n"
+        # Reorder for ease of reading
+        out += (
+            repr(
+                self.direct_delivery_start_intervals.data[
+                    [
+                        "start_time",
+                        "end_time",
+                        "from_terminal",
+                        "to_terminal",
+                        "cargo",
+                    ]
+                ]
+            )
+            + "\n\n"
+        )
+
         out += "Truck events:\n\n"
 
         for truck, events in self.truck_events.items():
-            out += "-------\n"
+            out += separator
             out += f"Truck {truck}:\n\n"
             # Replace event type numbers with enum names
             events = events.copy()
@@ -439,6 +499,13 @@ class Schedule:
                 lambda x: TruckEvent(x).name
             )
             out += repr(events) + "\n"
+
+        out += "Cargo:\n\n"
+        out += "Pickup:\n"
+        out += repr(self.terminal_cargo_pickup_intervals) + "\n"
+        out += separator
+        out += "Dropoff:\n"
+        out += repr(self.terminal_cargo_dropoff_intervals) + "\n"
 
         # out += "Truck unoccupied windows:\n\n"
         # for truck, events in self.truck_events.items():
