@@ -60,3 +60,4 @@ def test_schedule_creation():
     # fmt: on
 
     schedule = Schedule(terminals, trucks, transports)
+    print(schedule)

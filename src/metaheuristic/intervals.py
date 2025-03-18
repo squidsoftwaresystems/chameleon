@@ -5,6 +5,8 @@ import pandas as pd
 
 from .constants import INVALID_ID
 
+ListForInterval = List[Tuple[pd.Timestamp, pd.Timestamp, List[Any]]]
+
 
 class Intervals:
     """
@@ -124,6 +126,7 @@ class Intervals:
         out = cls()
         out.data = pd.DataFrame(
             data=kept_data,
+            columns=(["start_time", "end_time"] + cols_to_keep),
             index=start_times,
         )
 
@@ -132,7 +135,7 @@ class Intervals:
     @classmethod
     def from_list(
         cls,
-        data: List[Tuple[pd.Timestamp, pd.Timestamp, List[Any]]],
+        data: ListForInterval,
         column_names: List[str],
     ) -> Self:
         """
@@ -167,20 +170,19 @@ class Intervals:
     def intersect_on_column(
         self,
         other: Self,
-        column: str,
+        self_col: str,
+        other_col: str,
         self_cols_to_keep: List[str],
         other_cols_to_keep: List[str],
     ) -> Self:
         """
         Returns a an intersection of two sets of intervals, "joining"
-        on `column`. Specifically,
+        on `self_col` and `other_col`. Specifically,
 
-        For each interval I in `self`, if it has `data[column]` set to v,
+        For each interval I in `self`, if it has `data[self_col]` set to v,
         return an intersection of I and (union of intervals in
-        `other` that have the same value of `column`)
+        `other` that have the same value of `data[other_col]`)
 
-        :param intervals_by_terminal: mapping from terminal index to a
-        collection of intervals in format of OccupiedWindows.create_intervals
         :param self_cols_to_keep: names of columns to keep from self's data
         :param other_cols_to_keep: names of columns to keep from other's data
         """
@@ -190,14 +192,14 @@ class Intervals:
         for _, interval in self.data.iterrows():
             start_time: pd.Timestamp = interval["start_time"]
             end_time: pd.Timestamp = interval["end_time"]
-            data: Any = interval[column]
+            data: Any = interval[self_col]
 
             assert data is not INVALID_ID
 
             # Select constraint intervals which intersect interval
             # and have relevant data
             constraint_intervals: pd.DataFrame = other.data[
-                other.data[column]
+                other.data[other_col]
                 == data & (other.data["end_time"] >= start_time)
                 # index is start_time
                 & (other.data["start_time"] <= end_time)
