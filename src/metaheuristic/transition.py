@@ -50,24 +50,17 @@ class AddTransition(TruckScheduleChange):
 
     cargo: int
     """
-    A possibly INVALID_ID id of a cargo to be transported (if any)
-    """
-
-    transport_id: int
-    """
-    Id of the transport, corresponding to `requested_transports` id
+    The id of cargo transported
     """
 
     def __init__(
         self,
-        transport_id: int,
         from_terminal: int,
         to_terminal: int,
         start_time: pd.Timestamp,
         end_time: pd.Timestamp,
         cargo: int,
     ):
-        self.transport_id = transport_id
         self.from_terminal = from_terminal
         self.to_terminal = to_terminal
         self.start_time = start_time
@@ -80,7 +73,6 @@ class AddTransition(TruckScheduleChange):
         :param interval: an interval in the format of a row of `Intervals`
         """
         return cls(
-            transport_id=interval["transport_id"],
             from_terminal=interval["from_terminal"],
             to_terminal=interval["to_terminal"],
             start_time=interval["start_time"],
@@ -127,18 +119,29 @@ class AddTransition(TruckScheduleChange):
             (left_padding, right_padding),
         )
 
-    def reschedule(self, start_time: pd.Timestamp) -> Self:
+    def reschedule_start(self, start_time: pd.Timestamp) -> Self:
         """
         Create a copy of `self` that starts at `start_time`
         """
         return type(self)(
-            transport_id=self.transport_id,
             from_terminal=self.from_terminal,
             to_terminal=self.to_terminal,
             start_time=start_time,
             end_time=self.end_time + (start_time - self.start_time),
             cargo=self.cargo,
         )
+
+    # def reschedule_end(self, end_time: pd.Timestamp) -> Self:
+    #     """
+    #     Create a copy of `self` that ends at `end_time`
+    #     """
+    #     return type(self)(
+    #         from_terminal=self.from_terminal,
+    #         to_terminal=self.to_terminal,
+    #         start_time=self.start_time + (end_time - self.end_time),
+    #         end_time=end_time,
+    #         cargo=self.cargo,
+    #     )
 
     def update_on_transition_add(
         self,
@@ -182,6 +185,8 @@ class AddTransition(TruckScheduleChange):
             # When can the actual delivery occur
             # (disregarding other commitments of this truck)
             possible_start_intervals = (
+                # TODO: maybe it is faster to limit_time than intersect_on_column
+                # So maybe remove being able to call intersect_on_column with pd.Series
                 direct_delivery_start_intervals.intersect_on_column(
                     unoccupied_window,
                     self_col="cargo",
@@ -206,10 +211,10 @@ class AddTransition(TruckScheduleChange):
 
             # Try moving it as early as possible
             if (time := possible_start_intervals.earliest()) is not None:
-                out.append(self.reschedule(time))
+                out.append(self.reschedule_start(time))
             # Try moving as late as possible
             if (time := possible_start_intervals.latest()) is not None:
-                out.append(self.reschedule(time))
+                out.append(self.reschedule_start(time))
 
         return out
 

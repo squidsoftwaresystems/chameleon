@@ -15,8 +15,6 @@ from typing import (
 
 import pandas as pd
 
-from .constants import INVALID_ID
-
 ListForInterval = List[Tuple[pd.Timestamp, pd.Timestamp, List[Any]]]
 
 
@@ -354,8 +352,6 @@ class Intervals:
             start_time: pd.Timestamp = interval["start_time"]
             end_time: pd.Timestamp = interval["end_time"]
             data: Any = interval[self_col]
-
-            assert data is not INVALID_ID
 
             # Select constraint intervals which intersect interval
             # and have relevant data

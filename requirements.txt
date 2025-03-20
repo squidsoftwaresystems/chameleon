@@ -8,10 +8,12 @@ iniconfig==2.0.0
 itsdangerous==2.2.0
 Jinja2==3.1.5
 MarkupSafe==3.0.2
+mypy==1.15.0
 mypy-extensions==1.0.0
 numpy==2.2.3
 packaging==24.2
 pandas==2.2.3
+pandas-stubs==2.2.3.250308
 pluggy==1.5.0
 pytest==8.3.5
 python-dateutil==2.9.0.post0
@@ -19,6 +21,7 @@ python-dotenv==1.0.1
 pytz==2025.1
 requests==2.32.3
 six==1.17.0
+types-pytz==2025.1.0.20250204
 typing_extensions==4.12.2
 tzdata==2025.1
 urllib3==2.3.0

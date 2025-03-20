@@ -1,9 +1,8 @@
 from random import random
-from typing import Dict, List, Self, Tuple, cast
+from typing import Dict, List, Self, Set, Tuple, cast
 
 import pandas as pd
 
-from .constants import INVALID_ID, TruckEvent
 from .intervals import Intervals, ListForInterval
 from .transition import AddTransition, RemoveTransition, TruckScheduleChange
 
@@ -59,6 +58,11 @@ class Schedule:
     in between
     """
     # TODO: think of a way to allow hauling cargo during such B->C transition
+
+    unplanned_cargo: Set[int]
+    """
+    A set of cargo ids which need to be planned for
+    """
 
     terminal_open_intervals: Intervals
     """
@@ -126,24 +130,6 @@ class Schedule:
         """
 
         self.requested_transports = requested_transports
-        self.requested_transports["is_planned"] = False
-
-        truck_timestamps: Dict[int, List[pd.Timestamp]] = {}
-        truck_event_types: Dict[int, List[int]] = {}
-        truck_terminal: Dict[int, List[int]] = {}
-        truck_cargo: Dict[int, List[int]] = {}
-
-        def add_truck_event(
-            truck: int,
-            timestamp: pd.Timestamp,
-            event_type: int,
-            terminal: int,
-            cargo: int = INVALID_ID,
-        ):
-            truck_timestamps[truck].append(timestamp)
-            truck_event_types[truck].append(event_type)
-            truck_terminal[truck].append(terminal)
-            truck_cargo[truck].append(cargo)
 
         # Add terminal opening and closing times
         terminal_open_intervals = [
@@ -154,7 +140,7 @@ class Schedule:
             terminal_open_intervals, column_names=["terminal"]
         )
 
-        unoccupied_windows: Dict[int, Intervals] = {}
+        unoccupied_windows_by_truck: Dict[int, Intervals] = {}
 
         # Start with no deliveries planned
         self.transitions = {}
@@ -169,11 +155,6 @@ class Schedule:
                 [], column_names=["from_terminal", "to_terminal", "cargo"]
             )
 
-            truck_timestamps[truck] = []
-            truck_event_types[truck] = []
-            truck_terminal[truck] = []
-            truck_cargo[truck] = []
-
             # Add a dummy event to specify starting location
             starting_terminal: int = row["starting_terminal"]
             opening_time = cast(
@@ -185,7 +166,7 @@ class Schedule:
 
             # TODO: allow changing last terminal when adding new route,
             # since we don't care about where truck ends up
-            unoccupied_windows[truck] = Intervals.from_list(
+            unoccupied_windows_by_truck[truck] = Intervals.from_list(
                 [
                     (
                         opening_time,
@@ -196,8 +177,9 @@ class Schedule:
                 column_names=["from_terminal", "to_terminal"],
             )
 
-        self.unoccupied_windows_by_truck = unoccupied_windows
+        self.unoccupied_windows_by_truck = unoccupied_windows_by_truck
 
+        self.unplanned_cargo = set()
         # Map of terminals to list of pickup slots in form
         # (start_time, end_time, cargo_id)
         terminal_pickups: ListForInterval = []
@@ -219,6 +201,8 @@ class Schedule:
             dropoff_open_time: pd.Timestamp = row["dropoff_open_time"]
             dropoff_close_time: pd.Timestamp = row["dropoff_close_time"]
             driving_time: pd.Timedelta = row["driving_time"]
+
+            self.unplanned_cargo.add(cargo)
 
             driving_times[(from_terminal, to_terminal)] = driving_time
             # Assume same length in both directions
@@ -244,7 +228,11 @@ class Schedule:
         # Create the intervals
         self.terminal_cargo_pickup_intervals = Intervals.from_list(
             terminal_pickups,
-            column_names=["from_terminal", "cargo", "driving_time"],
+            column_names=[
+                "from_terminal",
+                "cargo",
+                "driving_time",
+            ],
         )
         self.terminal_cargo_dropoff_intervals = Intervals.from_list(
             terminal_dropoffs, column_names=["to_terminal", "cargo"]
@@ -286,102 +274,16 @@ class Schedule:
             )
         )
 
-    # def recalculate_possible_changes(self) -> None:
-    #     for truck in self.uncached_trucks:
-    #         assert truck is not INVALID_ID
-    #
-    #         self.possible_changes[truck] = []
-    #
-    #         truck_events = self.truck_events[truck]
-    #
-    #         # Find intervals between deliveries
-    #         unoccupied_windows = Intervals.from_dataframe(
-    #             truck_events,
-    #             TruckEvent.DELIVERY_END,
-    #             TruckEvent.DELIVERY_START,
-    #             cols_to_keep=["terminal"],
-    #         )
-    #
-    #         # Enforce that deliveries can occur while terminal is working
-    #         unoccupied_windows = unoccupied_windows.intersect_on_column(
-    #             self.terminal_open_intervals,
-    #             self_col="terminal",
-    #             other_col="terminal",
-    #             self_cols_to_keep=[],
-    #             other_cols_to_keep=["terminal"],
-    #         )
-    #
-    #         # Try to schedule deliveries during these windows
-    #
-    #         # Each interval for a possible start of a direct delivery
-    #         # is extended to also include completion time; so
-    #         # each interval I is replaced with the union of intervals
-    #         # [t, t + delivery time] for each t in I
-    #         delivery_intervals: Intervals = (
-    #             self.direct_delivery_start_intervals.shift_by(
-    #                 lambda interval: interval["driving_time"],
-    #                 shift_end_time=True,
-    #                 shift_start_time=False,
-    #             )
-    #         )
-    #
-    #         delivery_intervals_for_truck: Intervals = (
-    #             unoccupied_windows.intersect_on_column(
-    #                 delivery_intervals,
-    #                 self_col="terminal",
-    #                 other_col="from_terminal",
-    #                 self_cols_to_keep=[],
-    #                 other_cols_to_keep=[
-    #                     "from_terminal",
-    #                     "to_terminal",
-    #                     "cargo",
-    #                     "driving_time",
-    #                 ],
-    #             )
-    #         )
-    #
-    #         # First, try to deliver directly from current terminal to
-    #         # another terminal and then return without cargo
-    #         # TODO: is there any circumstance where always picking the earliest
-    #         # allowed departure time is a worse option?
-    #         # TODO: check that the truck can still do this delivery.
-    #         # For example, we could have starting intervals
-    #         # [            ]    [           ]
-    #         # which were then expanded to
-    #         # [                                        ]
-    #         # And a truck could be available in
-    #         #                [ ]
-    #         # Which might give us a false positive
-    #
-    #         def has_time_to_deliver_and_return(row: pd.Series) -> bool:
-    #             start_time = row["start_time"]
-    #             end_time = row["end_time"]
-    #             from_terminal = row["from_terminal"]
-    #             to_terminal = row["to_terminal"]
-    #             return (
-    #                 self.driving_times[(from_terminal, to_terminal)]
-    #                 + self.driving_times[(to_terminal, from_terminal)]
-    #                 <= end_time - start_time
-    #             )
-    #
-    #         # Pick earliest possible departure time and check
-    #         # that it is possible to do this
-    #         short_enough_intervals = delivery_intervals_for_truck.filter(
-    #             has_time_to_deliver_and_return
-    #         )
-    #
-    #         print(truck)
-    #         print(short_enough_intervals)
-    #
-    #         # TODO: maybe instead of invalidating
-    #         # cache for each truck, just update possible changes when
-    #         # a change is applied. I.e. AddTransition is applied ->
-    #         # update all intervals which overlap with this transition
-    #         for i, interval in short_enough_intervals:
-    #             # Go there
-    #             self.possible_changes[truck].append(
-    #                 AddCircularRoute.from_interval(interval)
-    #             )
+        # Finally, populate possible_changes
+        for truck, row in truck_data.iterrows():
+            truck = cast(int, truck)
+            unoccupied_windows: Intervals = self.unoccupied_windows_by_truck[
+                truck
+            ]
+            for _, unoccupied_window in unoccupied_windows:
+                self._find_potential_transitions_in_interval(
+                    unoccupied_window=unoccupied_window
+                )
 
     # TODO: also take expired deliveries into account when
     # evaluating a schedule
@@ -447,6 +349,7 @@ class Schedule:
             window_to_terminal: int = old_unoccupied_window["to_terminal"]
 
             # Add this as a delivery
+            self.unplanned_cargo.remove(change.cargo)
             self.transitions[truck] = self.transitions[truck].concat(
                 Intervals.from_list(
                     [
@@ -507,22 +410,92 @@ class Schedule:
         else:
             raise RuntimeError(f"Unknown transition type: {type(change)}")
 
-    # def _find_potential_transitions(
-    #     self,
-    #     unoccupied_windows: Intervals,
-    #     from_terminal: int,
-    #     to_interval: int,
-    # ) -> List[AddTransition]:
-    #     """
-    #     Returns list of possible AddTransitions that can be added to intervals
-    #     in `unoccupied_windows`.
-    #
-    #     :param from_terminal: the terminal truck starts at
-    #     :param to_terminal: the terminal truck ends at
-    #     """
-    #
-    #     pass
-    #
+    def _find_potential_transitions_in_interval(
+        self,
+        unoccupied_window: pd.Series,
+    ) -> List[AddTransition]:
+        """
+        Returns list of possible AddTransitions that can be added to interval
+        `unoccupied_window`.
+        """
+        window_start_time = unoccupied_window["start_time"]
+        window_end_time = unoccupied_window["end_time"]
+        from_terminal = unoccupied_window["from_terminal"]
+        to_terminal = unoccupied_window["to_terminal"]
+
+        # TODO: find out what cargo could have been taken with us
+        # up to this point, and consider it separately for a
+        # multi-step delivery
+
+        # Consider direct deliveries
+
+        # Only keep deliveries which start in `unoccupied_window`,
+        # as a rough first filter to reduce the amount of cargo considered
+        relevant_delivery_starts = (
+            self.direct_delivery_start_intervals.limit_time(
+                unoccupied_window["start_time"], unoccupied_window["end_time"]
+            )
+        )
+        # only consider unplanned cargo
+        relevant_delivery_starts.data = relevant_delivery_starts.data[
+            relevant_delivery_starts.data.isin(self.unplanned_cargo)
+        ]
+
+        out: List[AddTransition] = []
+        for _, delivery_start_interval in relevant_delivery_starts:
+            cargo = delivery_start_interval["cargo"]
+            delivery_starts_from_terminal = delivery_start_interval[
+                "from_terminal"
+            ]
+            delivery_starts_to_terminal = delivery_start_interval[
+                "to_terminal"
+            ]
+
+            # Create a preliminary transition to measure time intervals with
+            # All data here is correct, except for start_time and end_time.
+            # We will reschedule this transition, keeping its duration
+            change = AddTransition(
+                from_terminal=delivery_starts_from_terminal,
+                to_terminal=delivery_starts_to_terminal,
+                start_time=window_start_time,
+                end_time=window_start_time
+                + self.driving_times[
+                    (
+                        delivery_starts_from_terminal,
+                        delivery_starts_to_terminal,
+                    )
+                ],
+                cargo=cargo,
+            )
+
+            # TODO: extract this and end of AddTransition.update_on_transition_add
+            # into its own function
+
+            duration, (left_padding, right_padding) = (
+                change.get_duration_and_padding(
+                    from_terminal, to_terminal, self.driving_times
+                )
+            )
+
+            # Now check if we can fit this into the window
+            # First see if we can add it to beginning of the window
+            possible_start_intervals = Intervals.from_row(
+                delivery_start_interval
+            )
+            possible_start_intervals = possible_start_intervals.limit_time(
+                start_time=(window_start_time + left_padding),
+                end_time=(window_end_time - right_padding - duration),
+            )
+
+            # Try moving it as early as possible
+            if (time := possible_start_intervals.earliest()) is not None:
+                out.append(change.reschedule_start(time))
+            # Try moving as late as possible
+            if (time := possible_start_intervals.latest()) is not None:
+                out.append(change.reschedule_start(time))
+
+        return out
+
     def __repr__(self):
         separator = "-------\n"
 
@@ -547,18 +520,6 @@ class Schedule:
             )
             + "\n\n"
         )
-
-        out += "Truck events:\n\n"
-
-        for truck, events in self.truck_events.items():
-            out += separator
-            out += f"Truck {truck}:\n\n"
-            # Replace event type numbers with enum names
-            events = events.copy()
-            events["event_type"] = events["event_type"].apply(
-                lambda x: TruckEvent(x).name
-            )
-            out += repr(events) + "\n"
 
         out += "Cargo:\n\n"
         out += "Pickup:\n"
