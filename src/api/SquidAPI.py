@@ -90,6 +90,7 @@ class SquidAPI:
                     "remarks",
                     "website",
                     "zip",
+                    "updated",
                 ],
                 axis=1,
                 inplace=True,
