@@ -4,7 +4,7 @@ from typing import Dict, List, Self, Set, Tuple, cast
 import pandas as pd
 
 from .intervals import Intervals, ListForInterval
-from .transition import AddTransition, RemoveTransition, TruckScheduleChange
+from .transition import AddTransition, RemoveTransitions, TruckScheduleChange
 
 # TODO: collapse 2 consecutive empty transports into 1
 
@@ -281,7 +281,7 @@ class Schedule:
                 truck
             ]
             for _, unoccupied_window in unoccupied_windows:
-                self._find_potential_transitions_in_interval(
+                self.__find_potential_transitions_in_interval(
                     unoccupied_window=unoccupied_window
                 )
 
@@ -317,13 +317,13 @@ class Schedule:
             if random_change_index >= len(changes):
                 random_change_index -= len(changes)
             else:
-                return self._implement_change(
+                return self.__implement_change(
                     truck, changes[random_change_index]
                 )
 
         raise RuntimeError("Unexpectedly, no change was chosen")
 
-    def _implement_change(self, truck: int, change: TruckScheduleChange):
+    def __implement_change(self, truck: int, change: TruckScheduleChange):
         """
         Modify `self` with schedule change `change` applied
 
@@ -389,12 +389,12 @@ class Schedule:
 
             # Update the possible changes. For example, allow removing this transition
             updated_possible_changes: List[TruckScheduleChange] = [
-                RemoveTransition(start_time=start_time, end_time=end_time)
+                RemoveTransitions(start_time=start_time, end_time=end_time)
             ]
             # This might invalidate some delivery possibilities
             # that would clash with this delivery. Try to move them.
             for other_change in self.possible_changes[truck]:
-                assert type(other_change) in [AddTransition, RemoveTransition]
+                assert type(other_change) in [AddTransition, RemoveTransitions]
                 if type(other_change) is AddTransition:
                     other_change = cast(AddTransition, other_change)
                     updated_possible_changes += other_change.update_on_transition_add(
@@ -403,17 +403,124 @@ class Schedule:
                         driving_times=self.driving_times,
                         direct_delivery_start_intervals=self.direct_delivery_start_intervals,
                     )
-                elif type(other_change) is RemoveTransition:
+                elif type(other_change) is RemoveTransitions:
                     # Just keep it
                     updated_possible_changes.append(other_change)
+
+            self.possible_changes[truck] = updated_possible_changes
+        elif type(change) is RemoveTransitions:
+            change = cast(RemoveTransitions, change)
+            start_time = change.start_time
+            end_time = change.end_time
+            # Delete all transitions in the range
+            transitions_before: Intervals = self.transitions[
+                truck
+            ].filter_predicate(lambda row: (row["end_time"] <= start_time))
+            transitions_after: Intervals = self.transitions[
+                truck
+            ].filter_predicate(lambda row: (end_time <= row["start_time"]))
+            self.transitions[truck] = transitions_before.concat(
+                transitions_after
+            )
+
+            # Find an unoccupied_window
+            unoccupied_window_start_time = transitions_before.latest()
+            unoccupied_window_end_time = transitions_after.earliest()
+
+            assert unoccupied_window_start_time is not None
+            assert unoccupied_window_end_time is not None
+
+            # Applying RemoveTransitions might have changed the potential changes
+            # update them
+            updated_possible_changes = []
+            for other_change in self.possible_changes[truck]:
+                assert type(other_change) in [AddTransition, RemoveTransitions]
+                if type(other_change) is AddTransition:
+                    other_change = cast(AddTransition, other_change)
+                    # Only keep if doesn't intersect the interval
+                    # We will recalculate everything in unoccupied_window
+                    # interval, so don't keep transitions in that interval
+                    if (
+                        other_change.end_time <= unoccupied_window_start_time
+                    ) or (
+                        unoccupied_window_end_time <= other_change.start_time
+                    ):
+                        updated_possible_changes.append(other_change)
+                elif type(other_change) is RemoveTransitions:
+                    other_change = cast(RemoveTransitions, other_change)
+                    # There is nothing to remove in unoccupied_window,
+                    # so remove unoccupied_window from RemoveTransitions
+                    # TODO: rewrite this as removal of intervals
+
+                    # TODO: handle this case, too
+                    # You will need to add 2 intervals, one before and one after
+                    assert not (
+                        other_change.start_time
+                        <= unoccupied_window_start_time
+                        <= unoccupied_window_end_time
+                        <= other_change.end_time
+                    )
+
+                    # Remove sections of the interval that are already removed
+                    if (
+                        unoccupied_window_start_time
+                        <= other_change.start_time
+                        <= unoccupied_window_end_time
+                    ):
+                        other_change.start_time = unoccupied_window_end_time
+                    if (
+                        unoccupied_window_start_time
+                        <= other_change.end_time
+                        <= unoccupied_window_end_time
+                    ):
+                        other_change.end_time = unoccupied_window_start_time
+
+                    # If still a valid non-empty interval after changes
+                    if other_change.start_time < other_change.end_time:
+                        updated_possible_changes.append(other_change)
+
+            # Find from_terminal and to_terminal
+            earlier_intervals = transitions_before.data[
+                transitions_before.data["end_time"]
+                == unoccupied_window_start_time
+            ]
+            later_intervals = transitions_after.data[
+                transitions_after.data["start_time"]
+                == unoccupied_window_end_time
+            ]
+
+            # Should have exactly one row
+            assert earlier_intervals.shape[0] == 1
+            assert later_intervals.shape[0] == 1
+
+            # Match the intervals at endpoints
+            from_terminal = earlier_intervals["to_terminal"]
+            to_terminal = later_intervals["from_terminal"]
+
+            unoccupied_window = pd.Series(
+                {
+                    "start_time": unoccupied_window_start_time,
+                    "end_time": unoccupied_window_end_time,
+                    "from_terminal": from_terminal,
+                    "to_terminal": to_terminal,
+                }
+            )
+
+            # Calculate what transitions can be added in this interval
+            self.possible_changes[truck] = (
+                updated_possible_changes
+                + self.__find_potential_transitions_in_interval(
+                    unoccupied_window
+                )
+            )
 
         else:
             raise RuntimeError(f"Unknown transition type: {type(change)}")
 
-    def _find_potential_transitions_in_interval(
+    def __find_potential_transitions_in_interval(
         self,
         unoccupied_window: pd.Series,
-    ) -> List[AddTransition]:
+    ) -> List[TruckScheduleChange]:
         """
         Returns list of possible AddTransitions that can be added to interval
         `unoccupied_window`.
@@ -441,7 +548,7 @@ class Schedule:
             relevant_delivery_starts.data.isin(self.unplanned_cargo)
         ]
 
-        out: List[AddTransition] = []
+        out: List[TruckScheduleChange] = []
         for _, delivery_start_interval in relevant_delivery_starts:
             cargo = delivery_start_interval["cargo"]
             delivery_starts_from_terminal = delivery_start_interval[

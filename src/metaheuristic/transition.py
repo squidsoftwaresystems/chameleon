@@ -219,9 +219,10 @@ class AddTransition(TruckScheduleChange):
         return out
 
 
-class RemoveTransition(TruckScheduleChange):
+class RemoveTransitions(TruckScheduleChange):
     """
-    A class representing deletion of all transitions in a time interval
+    A class representing deletion of all transitions intersecting a time
+    interval. It does not remove intervals which only share an endpoint with it
     """
 
     start_time: pd.Timestamp
