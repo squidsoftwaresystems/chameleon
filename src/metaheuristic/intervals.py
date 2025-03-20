@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Iterator
 from typing import (
     Any,
     Callable,
@@ -6,6 +7,7 @@ from typing import (
     Dict,
     Hashable,
     List,
+    Optional,
     Self,
     Tuple,
     cast,
@@ -143,6 +145,20 @@ class Intervals:
         return out
 
     @classmethod
+    def from_row(cls, data: pd.Series) -> Self:
+        """
+        Create an Intervals object for single interval data
+        """
+
+        out = cls()
+        out.data = data.to_frame().T
+
+        assert "start_time" in out.data.columns
+        assert "end_time" in out.data.columns
+
+        return out
+
+    @classmethod
     def from_list(
         cls,
         data: ListForInterval,
@@ -155,9 +171,11 @@ class Intervals:
         :param column_names: names of columns for extra data
         """
 
+        # Reformat data and filter out 0-width intervals
         squashed_data = [
             [start_time, end_time] + rest
             for start_time, end_time, rest in data
+            if start_time < end_time
         ]
 
         intervals = pd.DataFrame(
@@ -176,6 +194,65 @@ class Intervals:
         out = cls()
         out.data = intervals
         return out
+
+    def concat(
+        self,
+        other: Self,
+    ) -> Self:
+        """
+        Returns a copy of `self` which is concatenation of `self` and `other`
+        """
+        # TODO: see if we can avoid keeping these as sorted
+        # TODO: check for overlapping
+        out = type(self)()
+        out.data = pd.concat(
+            [self.data, other.data], ignore_index=True
+        ).sort_values(by=["start_time"])
+        return out
+
+    def filter_predicate(self, pred: Callable[[pd.Series], bool]) -> Self:
+        """
+        Return a copy of `self` consisting of exactly the intervals
+        that `pred` returns `True` on
+        """
+        out = type(self)()
+        out.data = self.data[self.data.apply(pred, axis=1)]
+        return out
+
+    def filter_column(self, col: str, val: Any) -> Self:
+        """
+        Return a copy of `self` consisting of exactly the intervals
+        that have value `val` in column `col`
+        """
+        out = type(self)()
+        out.data = self.data[self.data[col] == val]
+        return out
+
+    def extract_interval(
+        self, start_time: pd.Timestamp, end_time: pd.Timestamp
+    ) -> pd.Series:
+        """
+        Find and delete interval containing [start_time, end_time].
+        The interval is returned. If the interval doesn't exist or is
+        not unique, raise an error
+
+        :param start_time: start time of interval to look for
+        :param end_time: end time of interval to look for
+        :raises: ValueError if 0 or more than 1 intervals match
+        """
+        matching_intervals = self.data[
+            (self.data["start_time"] <= start_time)
+            & (end_time <= self.data["end_time"])
+        ]
+        num_mathces = matching_intervals.shape[0]
+        if num_mathces != 1:
+            raise ValueError(
+                f"Expected exactly one interval to match, got {num_mathces}"
+            )
+
+        # Delete the row
+        self.data.drop(matching_intervals.index[0], inplace=True)
+        return matching_intervals.iloc[0]
 
     def shift_by(
         self,
@@ -208,18 +285,48 @@ class Intervals:
         out.data = new_data
         return out
 
-    # def rename_columns(self, mapping: Dict[str, str]) -> Self:
-    #     """
-    #     Return a copy of `self` that renames columns found in `mapping`
-    #     to their mapping.
-    #     """
-    #     out = type(self)()
-    #     out.data = self.data.rename(mapping)
-    #     return out
-    #
+    def limit_time(
+        self,
+        start_time: Optional[pd.Timestamp],
+        end_time: Optional[pd.Timestamp],
+    ) -> Self:
+        """
+        Return a copy of `self` with all intervals "trimmed"
+        to remove everything that occurs before start_time or after end_time
+        """
+
+        def trim(row: pd.Series):
+            if start_time is not None:
+                row["start_time"] = max(start_time, row["start_time"])
+            if end_time is not None:
+                row["end_time"] = min(end_time, row["end_time"])
+
+        data = self.data.apply(trim, axis=1)
+        # Remove invalid intervals
+        data = data[data["start_time"] < data["end_time"]]
+        out = type(self)()
+        out.data = data
+        return out
+
+    def earliest(self) -> Optional[pd.Timestamp]:
+        """
+        Return earliest time captured by the intervals
+        """
+        if self.data.empty:
+            return None
+        return self.data["start_time"].min()
+
+    def latest(self) -> Optional[pd.Timestamp]:
+        """
+        Return latest time captured by the intervals
+        """
+        if self.data.empty:
+            return None
+        return self.data["end_time"].max()
+
     def intersect_on_column(
         self,
-        other: Self,
+        other: Self | pd.Series,
         self_col: str,
         other_col: str,
         self_cols_to_keep: List[str],
@@ -233,11 +340,15 @@ class Intervals:
         return an intersection of I and (union of intervals in
         `other` that have the same value of `data[other_col]`)
 
+        :param other: `Intervals` or an interval represented by pd.Series to intersect on
         :param self_cols_to_keep: names of columns to keep from self's data
         :param other_cols_to_keep: names of columns to keep from other's data
         """
 
         new_intervals: List[pd.DataFrame] = []
+
+        if type(other) is pd.Series:
+            other = cast(Self, Intervals.from_row(other))
 
         for _, interval in self.data.iterrows():
             start_time: pd.Timestamp = interval["start_time"]
@@ -307,3 +418,6 @@ class Intervals:
 
     def __repr__(self):
         return f"Intervals:\n {self.data}"
+
+    def __iter__(self) -> Iterator[tuple[Hashable, pd.Series]]:
+        return self.data.iterrows().__iter__()
