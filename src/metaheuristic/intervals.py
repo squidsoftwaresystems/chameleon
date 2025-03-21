@@ -1,23 +1,12 @@
-from collections import defaultdict
 from collections.abc import Iterator
-from typing import (
-    Any,
-    Callable,
-    DefaultDict,
-    Dict,
-    Hashable,
-    List,
-    Optional,
-    Self,
-    Tuple,
-    cast,
-)
+from typing import Any, Callable, Hashable, List, Optional, Self, Tuple, cast
 
 import pandas as pd
 
-ListForInterval = List[Tuple[pd.Timestamp, pd.Timestamp, List[Any]]]
+ListForInterval = List[Tuple[pd.Timestamp, pd.Timestamp, Tuple]]
 
 
+# TODO: might even relax the restriction that it is sorted
 class Intervals:
     """
     A list of intervals with additional data
@@ -41,108 +30,6 @@ class Intervals:
     """
 
     @classmethod
-    def from_dataframe(
-        cls,
-        df: pd.DataFrame,
-        start_tag: int,
-        end_tag: int,
-        cols_to_keep: List[str] = [],
-    ) -> Self:
-        """
-        Create Intervals from a dataframe
-        Requires the dataframe to be sorted on its DatetimeIndex
-        and all intervals to be "finished", i.e. have an end.
-        Stores columns with names in cols_to_keep and requires these
-        to be the same at the beginning and end of interval to detect
-        intervals properly
-
-        :param df: dataframe to process
-        Index:
-            pd.DatetimeIndex
-        Columns:
-            Name: event_type,                           dtype: int64
-            Name: cols_to_keep[0],                      dtype: ?
-            ...
-            Name: cols_to_keep[len(cols_to_keep) - 1],  dtype: ?
-
-
-        :param start_tag: value in "event_type" column which signifies a start of the interval
-        :param end_tag: value in `tag_column` which signifies an end of the interval
-        :param tag_column: column in df to use to detect start/end of an interval
-        :param cols_to_keep: which columns to
-
-        :returns: a sorted dataframe of intervals
-        :rtype: pd.DataFrame
-
-        Index:
-            pd.RangeIndex
-        Columns:
-            Name: start_time,                           dtype: pd.Timestamp
-            Name: end_time,                             dtype: pd.Timestamp
-            Name: cols_to_keep[0],                      dtype: ?
-            ...
-            Name: cols_to_keep[len(cols_to_keep) - 1],  dtype: ?
-        """
-        # Time should be sorted
-        assert df.index.is_monotonic_increasing
-
-        start_times: List[pd.Timestamp] = []
-        kept_data: Dict[str, List[Any]] = {col: [] for col in cols_to_keep}
-        kept_data["start_time"] = []
-        kept_data["end_time"] = []
-
-        # Keep track of variables needed for parsing,
-        # separately for each combination of data
-
-        # Default initial time is 0
-        last_time_for_data: DefaultDict[Hashable, pd.Timestamp] = defaultdict(
-            lambda: pd.to_datetime(0, origin="unix")
-        )
-        # first event starts creating an interval
-        is_new_interval_for_data: DefaultDict[Hashable, bool] = defaultdict(
-            lambda: True
-        )
-
-        # Only keep the rows relating to the intervals
-        df = df[df["event_type"].isin([start_tag, end_tag])]
-
-        for time, row in df.iterrows():
-            time = cast(pd.Timestamp, time)
-            data = row[cols_to_keep]
-            hashable_data: Hashable = tuple(data.to_list())
-
-            is_new_interval = is_new_interval_for_data[hashable_data]
-            last_time = last_time_for_data[hashable_data]
-
-            if is_new_interval:
-                assert row["event_type"] == start_tag
-            else:
-                assert row["event_type"] == end_tag
-
-                # Create an "unoccupied window"
-                start_times.append(last_time)
-                for col in cols_to_keep:
-                    kept_data[col].append(data[col])
-                kept_data["start_time"].append(last_time)
-                kept_data["end_time"].append(time)
-
-            last_time_for_data[hashable_data] = time
-            is_new_interval_for_data[hashable_data] = not is_new_interval
-
-        # Check that all intervals have been closed
-        for hashable_data in last_time_for_data:
-            assert is_new_interval_for_data[hashable_data]
-
-        out = cls()
-        out.data = pd.DataFrame(
-            data=kept_data,
-            columns=(["start_time", "end_time"] + cols_to_keep),
-            index=start_times,
-        )
-
-        return out
-
-    @classmethod
     def from_row(cls, data: pd.Series) -> Self:
         """
         Create an Intervals object for single interval data
@@ -151,8 +38,7 @@ class Intervals:
         out = cls()
         out.data = data.to_frame().T
 
-        assert "start_time" in out.data.columns
-        assert "end_time" in out.data.columns
+        Intervals.__sort_and_assert_valid(out.data)
 
         return out
 
@@ -171,27 +57,54 @@ class Intervals:
 
         # Reformat data and filter out 0-width intervals
         squashed_data = [
-            [start_time, end_time] + rest
+            [start_time, end_time] + list(rest)
             for start_time, end_time, rest in data
-            if start_time < end_time
         ]
 
-        intervals = pd.DataFrame(
+        intervals: pd.DataFrame = pd.DataFrame(
             squashed_data,
             columns=(["start_time", "end_time"] + column_names),
-        ).sort_values(by=["start_time"])
+        )
 
-        # TODO: Check that intervals are valid: start_time<=end_time and
-        # non-overlapping
-        # start_times = intervals["start_time"]
-        # end_times = intervals["end_time"]
-        # assert (start_times <= end_times).all()
-        # # Non-overlapping
-        # assert (end_times[:-1] <= start_times[1:]).all()
+        Intervals.__sort_and_assert_valid(intervals)
 
         out = cls()
         out.data = intervals
         return out
+
+    @staticmethod
+    def __sort_and_assert_valid(data: pd.DataFrame):
+        """
+        Given data, checks if it is valid data for `Intervals`
+        """
+
+        assert "start_time" in data.columns
+        assert "end_time" in data.columns
+
+        # Check types
+        # TODO: use a more robust check, to check all values in columns
+        assert type(data["start_time"].iloc[0]) is pd.Timestamp
+        assert type(data["end_time"].iloc[0]) is pd.Timestamp
+
+        # If the values are sorted by start_time,
+        # it makes it easier to check e.g. that the intervals are
+        # pairwise not overlapping, by going through
+        # the intervals in order
+        data.sort_values("start_time", inplace=True)
+
+        # Assert intervals have a positive length
+        assert (data["start_time"] < data["end_time"]).all()
+
+        # Check that intervals non-overlapping
+        for _, group in data.groupby(
+            list(data.columns.drop(["start_time", "end_time"]))
+        ):
+            interval1 = group.iloc[0]
+            for _, interval2 in group.iloc[1:].iterrows():
+                assert (interval1["end_time"] <= interval2["start_time"]) or (
+                    interval2["end_time"] <= interval1["start_time"]
+                )
+                interval1 = interval2
 
     def concat(
         self,
@@ -200,12 +113,11 @@ class Intervals:
         """
         Returns a copy of `self` which is concatenation of `self` and `other`
         """
-        # TODO: see if we can avoid keeping these as sorted
-        # TODO: check for overlapping
         out = type(self)()
-        out.data = pd.concat(
-            [self.data, other.data], ignore_index=True
-        ).sort_values(by=["start_time"])
+        out.data = pd.concat([self.data, other.data], ignore_index=True)
+
+        Intervals.__sort_and_assert_valid(out.data)
+
         return out
 
     def filter_predicate(self, pred: Callable[[pd.Series], bool]) -> Self:
@@ -255,27 +167,22 @@ class Intervals:
     def shift_by(
         self,
         by: Callable[[pd.Series], pd.Timedelta],
-        shift_start_time: bool = True,
-        shift_end_time: bool = True,
     ) -> Self:
         """
         Returns a copy of `self`, with each interval
-        shifted by `by(interval)`
+        shifted by `by(interval)`. Note that `by` has
+        some restrictions:
 
-        :param by: A mapping of intervals (rows) to shifts
-        :param shift_start_time: whether we should shift start_time
-        :param shift_end_time: whether we should shift end_time
+        :param by: A mapping of intervals (rows) to shifts. `by` doesn't
+        receive `start_time` and `end_time` and has to be a pure function -
+        otherwise, we can't guarantee that the intervals aren't overlapping
+        for each additional data
         """
-        keys_to_shift: List[str] = []
-        if shift_start_time:
-            keys_to_shift.append("start_time")
-        if shift_end_time:
-            keys_to_shift.append("end_time")
 
-        # TODO: deal with these intervals potentially being overlapping
-        # TODO: maybe allow them to overlap
         def shift(row: pd.Series):
-            row[keys_to_shift] += by(row)
+            row[["start_time", "end_time"]] += by(
+                row.drop(["start_time", "end_time"])
+            )
             return row
 
         new_data = self.data.apply(shift, axis=1)
@@ -298,6 +205,7 @@ class Intervals:
                 row["start_time"] = max(start_time, row["start_time"])
             if end_time is not None:
                 row["end_time"] = min(end_time, row["end_time"])
+            return row
 
         data = self.data.apply(trim, axis=1)
         # Remove invalid intervals
@@ -338,7 +246,7 @@ class Intervals:
         return an intersection of I and (union of intervals in
         `other` that have the same value of `data[other_col]`)
 
-        :param other: `Intervals` or an interval represented by pd.Series to intersect on
+        :param other: `Intervals` to intersect on
         :param self_cols_to_keep: names of columns to keep from self's data
         :param other_cols_to_keep: names of columns to keep from other's data
         """
