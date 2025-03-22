@@ -297,8 +297,8 @@ class SquidAPI:
                     if transport.get("deleted", True):
                         continue
 
-                    # Add booking reference
-                    transport["booking_id"] = booking["id"]
+                    # Rename booking to booking_id
+                    transport["booking_id"] = transport.pop("booking")
 
                     # Process planner information
                     if transport.get("planner"):
@@ -357,7 +357,17 @@ class SquidAPI:
             self.routes = pd.DataFrame(all_routes)
             self.routes.set_index("id", inplace=True)
             self.routes.drop(
-                columns=["deleted", "created", "updated"], errors="ignore", inplace=True
+                columns=[
+                    "deleted",
+                    "created",
+                    "updated",
+                    "planned_arrival",
+                    "planned_departure",
+                    "planned_driving_duration",
+                    "planned_service_duration",
+                ],
+                errors="ignore",
+                inplace=True,
             )
             self.routes.to_csv(self.__ROUTESPATH)
         else:
