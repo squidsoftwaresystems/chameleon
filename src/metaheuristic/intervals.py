@@ -81,10 +81,12 @@ class Intervals:
         assert "start_time" in data.columns
         assert "end_time" in data.columns
 
-        # Check types
-        # TODO: use a more robust check, to check all values in columns
-        assert type(data["start_time"].iloc[0]) is pd.Timestamp
-        assert type(data["end_time"].iloc[0]) is pd.Timestamp
+        # Check types, if there are any rows
+        if data.shape[0] > 0:
+            # TODO: use a more robust check, to check all values in columns
+            # or find a way to properly check column type
+            assert type(data["start_time"].iloc[0]) is pd.Timestamp
+            assert type(data["end_time"].iloc[0]) is pd.Timestamp
 
         # If the values are sorted by start_time,
         # it makes it easier to check e.g. that the intervals are
@@ -114,7 +116,14 @@ class Intervals:
         Returns a copy of `self` which is concatenation of `self` and `other`
         """
         out = type(self)()
-        out.data = pd.concat([self.data, other.data], ignore_index=True)
+
+        # Don't concat if one of them is empty
+        if self.data.shape[0] == 0:
+            out.data = other.data
+        elif other.data.shape[0] == 0:
+            out.data = self.data
+        else:
+            out.data = pd.concat([self.data, other.data], ignore_index=True)
 
         Intervals.__sort_and_assert_valid(out.data)
 
@@ -312,7 +321,17 @@ class Intervals:
                 new_intervals.append(constraint_intervals)
 
         out = type(self)()
-        out.data = pd.concat(new_intervals)
+        if len(new_intervals) > 0:
+            out.data = pd.concat(new_intervals)
+        else:
+            out.data = pd.DataFrame(
+                {
+                    col: []
+                    for col in ["start_time", "end_time"]
+                    + other_cols_to_keep
+                    + self_cols_to_keep
+                }
+            )
         return out
 
     def copy(self) -> Self:
@@ -321,7 +340,7 @@ class Intervals:
         return out
 
     def __repr__(self):
-        return f"Intervals:\n {self.data}"
+        return repr(self.data)
 
     def __iter__(self) -> Iterator[tuple[Hashable, pd.Series]]:
         return self.data.iterrows().__iter__()

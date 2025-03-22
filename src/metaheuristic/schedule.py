@@ -1,3 +1,4 @@
+from copy import deepcopy
 from random import random
 from typing import Dict, List, Self, Set, Tuple, cast
 
@@ -82,7 +83,7 @@ class Schedule:
     direct_delivery_start_intervals: Intervals
     """
     List of intervals during which a direct delivery can start, based on
-    satisfying constraints such as pickup and dropoff window and travel time.
+    satisfying constraints such as pickup and dropoff window and driving time.
     Keeps track of cargo, from_terminal, to_terminal, driving_time.
     """
 
@@ -133,7 +134,7 @@ class Schedule:
 
         # Add terminal opening and closing times
         terminal_open_intervals = [
-            (row["opening_time"], row["closing_time"], [terminal])
+            (row["opening_time"], row["closing_time"], (terminal,))
             for terminal, row in terminal_data.iterrows()
         ]
         self.terminal_open_intervals = Intervals.from_list(
@@ -171,13 +172,13 @@ class Schedule:
                     (
                         opening_time,
                         opening_time + pd.to_timedelta(24, unit="h"),
-                        [starting_terminal, starting_terminal],
+                        (starting_terminal, starting_terminal),
                     )
                 ],
                 column_names=["from_terminal", "to_terminal"],
             )
 
-        self.unoccupied_windows_by_truck = unoccupied_windows_by_truck
+        self.unoccupied_windows = unoccupied_windows_by_truck
 
         self.unplanned_cargo = set()
         # Map of terminals to list of pickup slots in form
@@ -216,11 +217,11 @@ class Schedule:
                 (
                     pickup_open_time,
                     pickup_close_time,
-                    [from_terminal, cargo, driving_time],
+                    (from_terminal, cargo, driving_time),
                 )
             )
             terminal_dropoffs.append(
-                (dropoff_open_time, dropoff_close_time, [to_terminal, cargo])
+                (dropoff_open_time, dropoff_close_time, (to_terminal, cargo))
             )
 
         self.driving_times = driving_times
@@ -275,15 +276,18 @@ class Schedule:
         )
 
         # Finally, populate possible_changes
+        self.possible_changes = {}
         for truck, row in truck_data.iterrows():
             truck = cast(int, truck)
-            unoccupied_windows: Intervals = self.unoccupied_windows_by_truck[
-                truck
-            ]
+            unoccupied_windows: Intervals = self.unoccupied_windows[truck]
+            possible_changes_for_truck = []
             for _, unoccupied_window in unoccupied_windows:
-                self.__find_potential_transitions_in_interval(
-                    unoccupied_window=unoccupied_window
+                possible_changes_for_truck += (
+                    self.__find_potential_transitions_in_interval(
+                        unoccupied_window=unoccupied_window
+                    )
                 )
+            self.possible_changes[truck] = possible_changes_for_truck
 
     # TODO: also take expired deliveries into account when
     # evaluating a schedule
@@ -317,11 +321,46 @@ class Schedule:
             if random_change_index >= len(changes):
                 random_change_index -= len(changes)
             else:
-                return self.__implement_change(
+                return self.copy().__implement_change(
                     truck, changes[random_change_index]
                 )
 
         raise RuntimeError("Unexpectedly, no change was chosen")
+
+    def get_driving_time(
+        self, from_terminal: int, to_terminal: int
+    ) -> pd.Timedelta:
+        if from_terminal == to_terminal:
+            return pd.Timedelta(0)
+        else:
+            return self.driving_times[(from_terminal, to_terminal)]
+
+    def copy(self) -> Self:
+        # Create without initialising
+        other: Self = Self.__new__(type(self))
+
+        other.unoccupied_windows = deepcopy(self.unoccupied_windows)
+
+        other.possible_changes = deepcopy(self.possible_changes)
+
+        other.transitions = deepcopy(self.transitions)
+
+        other.unplanned_cargo = deepcopy(self.unplanned_cargo)
+
+        other.requested_transports = self.requested_transports
+        other.terminal_open_intervals = self.terminal_open_intervals
+        other.terminal_cargo_pickup_intervals = (
+            self.terminal_cargo_pickup_intervals
+        )
+        other.terminal_cargo_dropoff_intervals = (
+            self.terminal_cargo_dropoff_intervals
+        )
+        other.direct_delivery_start_intervals = (
+            self.direct_delivery_start_intervals
+        )
+        other.driving_times = self.driving_times
+
+        return other
 
     def __implement_change(self, truck: int, change: TruckScheduleChange):
         """
@@ -356,11 +395,11 @@ class Schedule:
                         (
                             start_time,
                             end_time,
-                            [
+                            (
                                 change.from_terminal,
                                 change.to_terminal,
                                 change.cargo,
-                            ],
+                            ),
                         )
                     ],
                     column_names=["from_terminal", "to_terminal", "cargo"],
@@ -373,12 +412,12 @@ class Schedule:
                     (
                         window_start_time,
                         start_time,
-                        [window_from_terminal, change.from_terminal],
+                        (window_from_terminal, change.from_terminal),
                     ),
                     (
                         end_time,
                         window_end_time,
-                        [change.to_terminal, window_to_terminal],
+                        (change.to_terminal, window_to_terminal),
                     ),
                 ],
                 column_names=["from_terminal", "to_terminal"],
@@ -400,7 +439,7 @@ class Schedule:
                     updated_possible_changes += other_change.update_on_transition_add(
                         old_unoccupied_window=old_unoccupied_window,
                         new_unoccupied_windows=new_unoccupied_windows,
-                        driving_times=self.driving_times,
+                        get_driving_time=self.get_driving_time,
                         direct_delivery_start_intervals=self.direct_delivery_start_intervals,
                     )
                 elif type(other_change) is RemoveTransitions:
@@ -545,7 +584,7 @@ class Schedule:
         )
         # only consider unplanned cargo
         relevant_delivery_starts.data = relevant_delivery_starts.data[
-            relevant_delivery_starts.data.isin(self.unplanned_cargo)
+            relevant_delivery_starts.data["cargo"].isin(self.unplanned_cargo)
         ]
 
         out: List[TruckScheduleChange] = []
@@ -566,12 +605,10 @@ class Schedule:
                 to_terminal=delivery_starts_to_terminal,
                 start_time=window_start_time,
                 end_time=window_start_time
-                + self.driving_times[
-                    (
-                        delivery_starts_from_terminal,
-                        delivery_starts_to_terminal,
-                    )
-                ],
+                + self.get_driving_time(
+                    delivery_starts_from_terminal,
+                    delivery_starts_to_terminal,
+                ),
                 cargo=cargo,
             )
 
@@ -580,7 +617,7 @@ class Schedule:
 
             duration, (left_padding, right_padding) = (
                 change.get_duration_and_padding(
-                    from_terminal, to_terminal, self.driving_times
+                    from_terminal, to_terminal, self.get_driving_time
                 )
             )
 

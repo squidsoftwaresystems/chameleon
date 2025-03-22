@@ -266,3 +266,19 @@ def test_intersect_on_column():
     )
 
     assert compare_intervals(new_intervals, expected_new_intervals)
+
+    # Check that it can produce an empty intersection
+    empty_intersection = intervals.intersect_on_column(
+        Intervals.from_list(
+            [(pd.Timestamp(100), pd.Timestamp(101), (3, 4))],
+            column_names=["test1", "test2"],
+        ),
+        self_col="test1",
+        other_col="test2",
+        self_cols_to_keep=[],
+        other_cols_to_keep=[],
+    )
+
+    assert compare_intervals(
+        empty_intersection, Intervals.from_list([], column_names=[])
+    )

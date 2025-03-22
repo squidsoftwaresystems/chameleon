@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Dict, List, Self, Tuple, cast
+from typing import Callable, Dict, List, Self, Tuple, cast
 
 import pandas as pd
 
@@ -84,7 +84,7 @@ class AddTransition(TruckScheduleChange):
         self,
         from_terminal: int,
         to_terminal: int,
-        driving_times: Dict[Tuple[int, int], pd.Timedelta],
+        get_driving_time: Callable[[int, int], pd.Timedelta],
     ) -> Tuple[pd.Timedelta, Tuple[pd.Timedelta, pd.Timedelta]]:
         """
         If we are adding this transition to an unoccupied window starting
@@ -105,13 +105,15 @@ class AddTransition(TruckScheduleChange):
         if from_terminal == self.from_terminal:
             left_padding = pd.Timedelta(0)
         else:
-            left_padding = driving_times[(from_terminal, self.from_terminal)]
+            left_padding = get_driving_time(from_terminal, self.from_terminal)
         if to_terminal == self.to_terminal:
             right_padding = pd.Timedelta(0)
         else:
-            right_padding = driving_times[(self.from_terminal, to_terminal)]
+            right_padding = get_driving_time(self.from_terminal, to_terminal)
 
-        delivery_duration = driving_times[self.from_terminal, self.to_terminal]
+        delivery_duration = get_driving_time(
+            self.from_terminal, self.to_terminal
+        )
         assert delivery_duration == self.end_time - self.start_time
 
         return (
@@ -147,7 +149,7 @@ class AddTransition(TruckScheduleChange):
         self,
         old_unoccupied_window: pd.Series,
         new_unoccupied_windows: Intervals,
-        driving_times: Dict[Tuple[int, int], pd.Timedelta],
+        get_driving_time: Callable[[int, int], pd.Timedelta],
         direct_delivery_start_intervals: Intervals,
     ) -> List[Self]:
         """
@@ -173,7 +175,7 @@ class AddTransition(TruckScheduleChange):
                 self.get_duration_and_padding(
                     unoccupied_window["from_terminal"],
                     unoccupied_window["to_terminal"],
-                    driving_times,
+                    get_driving_time,
                 )
             )
 

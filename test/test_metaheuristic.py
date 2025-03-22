@@ -1,3 +1,4 @@
+import random
 from typing import List
 
 import pandas as pd
@@ -6,23 +7,7 @@ import pytest
 from src.metaheuristic.schedule import Schedule
 
 
-def test_get_neighbours():
-    def verify_neighbourhood_constraints(schedule: Schedule):
-        nbs: List[Schedule] = []  # get_neighbours(schedule)
-        for nb in nbs:
-            assert True
-
-    schedule1 = Schedule()
-    verify_neighbourhood_constraints(schedule1)
-    schedule2 = Schedule()
-    verify_neighbourhood_constraints(schedule2)
-    schedule3 = Schedule()
-    verify_neighbourhood_constraints(schedule3)
-
-    raise NotImplementedError
-
-
-def test_schedule_creation():
+def create_schedule_data():
     # Converts list of hours to pandas datetime index
     def to_time(hours: List[float]) -> pd.DatetimeIndex:
         # convert to seconds
@@ -56,10 +41,22 @@ def test_schedule_creation():
             "pickup_close_time":  to_time([8, 14, 14, 19,  19,  20]),
             "dropoff_open_time":  to_time([8, 12, 10, 20,   9,  15]),
             "dropoff_close_time": to_time([9, 14, 12, 22,  10,  17]),
-            "travel_duration": to_timedelta([1,  1,  1,  2, 0.5, 2.5]),
+            "driving_time": to_timedelta([1,  1,  1,  2, 0.5, 2.5]),
         }
     )
     # fmt: on
+    return (terminals, trucks, transports)
 
+
+def test_get_neighbours():
+    (terminals, trucks, transports) = create_schedule_data()
     schedule = Schedule(terminals, trucks, transports)
-    print(schedule)
+    random.seed(0)
+
+    for _ in range(10):
+        schedule.get_random_neighbour()
+
+
+def test_schedule_creation():
+    (terminals, trucks, transports) = create_schedule_data()
+    schedule = Schedule(terminals, trucks, transports)
