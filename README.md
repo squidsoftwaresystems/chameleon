@@ -6,6 +6,8 @@
 2. Activate the venv: `.venv\Scripts\activate` on Windows, `source .venv/bin/activate` on Linux/MacOS
 3. Install the required packages: `pip install -r requirements.txt`
 4. Add your API key to a `.env` file at the project root, or set it as a environment variable. You can use `.env.example` as a template.
+5. Install [Ninja](https://github.com/ninja-build/ninja/wiki/Pre-built-Ninja-packages)
+6. Install the package in this repository: `pip install --no-build-isolation --editable .`
 
 ## Usage
 
@@ -17,6 +19,9 @@ Then you can:
 - Run algorithms by themselves by running other scripts in subfolders of `evaluation/`
 
 ## Development:
+If your IDE requires it, copy the `compile_commands.json` from under `build/cp313` into root folder if IDE is not giving proper LSP support.
+Note that this file is generated when meson recompiles the project - to do that, re-run `pip install --no-build-isolation --editable .`
+
 The main code is under `src`, code for performance evaluation is under `evaluation`, code for unit tests is under `test`
 
 When running and developing code, it is recommended to put the entry points into `evaluation` and only keep logic under `src`. For example, `evaluation/metaheuristic/run_aco.py` might fetch data, and call a method in `src/metaheuristic` to optimise over it.
