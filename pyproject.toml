@@ -1,17 +1,15 @@
 [build-system]
-build-backend = 'mesonpy'
-requires = ['meson-python']
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
 
 [project]
-name = 'chameleon'
-version = '1.0.0'
-description = 'Application to plan container delivery'
-readme = 'README.md'
-
-# [project.scripts]
-# example = 'example.cli:main'
-[tool.pytest.ini_options]
-minversion = "6.0"
-testpaths = [
-    "test",
+name = "chameleon"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
 ]
+dynamic = ["version"]
+[tool.maturin]
+features = ["pyo3/extension-module"]

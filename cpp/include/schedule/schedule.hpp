@@ -54,7 +54,7 @@ public:
 /** A class that is used to generate schedules
  */
 class ScheduleGenerator {
-  /**
+ /**
    * Intervals when the terminals are open
    */
   std::map<Terminal, Interval> m_terminal_open_intervals;
