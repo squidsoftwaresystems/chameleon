@@ -15,12 +15,11 @@ First, activate the venv: `.venv\Scripts\activate` on Windows, `source .venv/bin
 
 Then you can:
 - Run unit tests in `test/` folder using `pytest`
+- Rebuild the rust packages for development using `maturin develop` or for release using `maturin build`. Note that for the latter, you might need to install the wheel as a python package.
 - Compare performance of algorithms on data by running `evaluation/compare_performance.py`
 - Run algorithms by themselves by running other scripts in subfolders of `evaluation/`
 
 ## Development:
-If your IDE requires it, copy the `compile_commands.json` from under `build/cp313` into root folder if IDE is not giving proper LSP support.
-Note that this file is generated when meson recompiles the project - to do that, re-run `pip install --no-build-isolation --editable .`
 
 The main code is under `src`, code for performance evaluation is under `evaluation`, code for unit tests is under `test`
 
