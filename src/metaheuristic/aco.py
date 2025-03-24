@@ -1,4 +1,4 @@
-from .schedule import Schedule
+from chameleon_rust import Schedule
 
 
 def aco_solve(problem):

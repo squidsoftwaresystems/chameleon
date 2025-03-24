@@ -1,6 +1,8 @@
 use std::cmp::max;
 use std::cmp::min;
 
+// TODO: convert these to struct Time(u64) and TimeDelta(i64)
+// to make it more fool-proof
 pub type Time = u64;
 pub type TimeDelta = i64;
 
@@ -188,5 +190,31 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
     /// Remove interval at index `index`, panic if index out of bounds
     pub fn remove(&mut self, index: usize) -> IntervalWithData<T> {
         return self.intervals.remove(index);
+    }
+
+    /// Inserts a transition, returns true if and only if
+    /// this addition was valid (i.e. non-overlapping)
+    pub fn try_add(&mut self, new: IntervalWithData<T>) -> bool {
+        // Find index at which it can be put in
+        // first index which is after `new`
+        let index = self
+            .intervals
+            .iter()
+            .position(|interval| interval.start_time > new.end_time);
+
+        if let Some(index) = index {
+            assert!(index > 0);
+            // check that `new` occurs after the previous interval
+            let prev = self.intervals.get(index - 1).unwrap();
+            if !(prev.end_time < new.start_time) {
+                return false;
+            }
+            self.intervals.insert(index, new);
+            return true;
+        } else {
+            // It should be the last interval
+            self.intervals.push(new);
+            return true;
+        }
     }
 }

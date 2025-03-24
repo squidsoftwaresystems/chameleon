@@ -4,7 +4,7 @@ from typing import List
 import pandas as pd
 import pytest
 
-from src.metaheuristic.schedule import Schedule
+from src.metaheuristic.schedule import make_schedule_generator
 
 
 def create_schedule_data():
@@ -50,13 +50,15 @@ def create_schedule_data():
 
 def test_get_neighbours():
     (terminals, trucks, transports) = create_schedule_data()
-    schedule = Schedule(terminals, trucks, transports)
+    schedule_generator = make_schedule_generator(terminals, trucks, transports)
+    schedule = schedule_generator.empty_schedule()
     random.seed(0)
 
     for _ in range(10):
-        schedule.get_random_neighbour()
+        new_schedule = schedule_generator.get_schedule_neighbour(schedule, 10)
+        print(new_schedule)
 
 
 def test_schedule_creation():
     (terminals, trucks, transports) = create_schedule_data()
-    schedule = Schedule(terminals, trucks, transports)
+    schedule = make_schedule_generator(terminals, trucks, transports)
