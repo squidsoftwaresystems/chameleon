@@ -1,1 +1,1 @@
-sources = files('common.cpp', 'truck_schedule.cpp', 'schedule.cpp', 'bindings.cpp')
+sources = files('common.cpp', 'schedule.cpp', 'bindings.cpp')
