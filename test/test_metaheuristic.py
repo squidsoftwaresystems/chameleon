@@ -54,11 +54,8 @@ def test_get_neighbours():
     schedule = schedule_generator.empty_schedule()
     random.seed(0)
 
-    for _ in range(10):
-        new_schedule = schedule_generator.get_schedule_neighbour(schedule, 10)
-        print(new_schedule)
-
-
-def test_schedule_creation():
-    (terminals, trucks, transports) = create_schedule_data()
-    schedule = make_schedule_generator(terminals, trucks, transports)
+    # I don't know how to test this without inspecting it by hand,
+    # or testing that the schedule is valid.
+    # TODO: automatically check that the schedule is valid
+    for _ in range(100):
+        schedule = schedule_generator.get_schedule_neighbour(schedule, 100)

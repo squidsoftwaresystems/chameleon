@@ -1,6 +1,8 @@
 use std::cmp::max;
 use std::cmp::min;
 
+use pyo3::pyclass;
+
 // TODO: convert these to struct Time(u64) and TimeDelta(i64)
 // to make it more fool-proof
 pub type Time = u64;
@@ -9,7 +11,7 @@ pub type TimeDelta = i64;
 pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct IntervalWithData<T>
 where
     T: Eq,
@@ -42,7 +44,7 @@ impl<T: Clone + Eq> IntervalWithData<T> {
     }
 
     pub fn get_duration(&self) -> TimeDelta {
-        return (self.start_time - self.end_time).try_into().unwrap();
+        return (self.end_time - self.start_time).try_into().unwrap();
     }
 
     pub fn get_additional_data(&self) -> &T {
@@ -70,7 +72,7 @@ impl<T: Clone + Eq> IntervalWithData<T> {
 }
 
 /// A list of non-overlapping intervals in an increasing order
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct IntervalWithDataChain<T>
 where
     T: Eq,
@@ -200,14 +202,16 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
         let index = self
             .intervals
             .iter()
-            .position(|interval| interval.start_time > new.end_time);
+            .position(|interval| interval.start_time >= new.end_time);
 
         if let Some(index) = index {
-            assert!(index > 0);
-            // check that `new` occurs after the previous interval
-            let prev = self.intervals.get(index - 1).unwrap();
-            if !(prev.end_time < new.start_time) {
-                return false;
+            // If a previous interval exists, check that `new`
+            // occurs after the previous interval
+            if index > 0 {
+                let prev = self.intervals.get(index - 1).unwrap();
+                if !(prev.end_time <= new.start_time) {
+                    return false;
+                }
             }
             self.intervals.insert(index, new);
             return true;

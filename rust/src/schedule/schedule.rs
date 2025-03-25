@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pyo3::{exceptions::PyTypeError, pyclass, pymethods, FromPyObject, PyResult};
 use rand::{seq::IndexedRandom, Rng};
@@ -14,7 +14,7 @@ type Cargo = u64;
 type Truck = u64;
 
 /// A class representing information for a transition other than time
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct TransitionInfo {
     from: Terminal,
     to: Terminal,
@@ -72,6 +72,7 @@ impl TransportRequest {
     }
 }
 
+#[derive(Debug)]
 struct CargoDeliveryInformation {
     ///Times during which a pickup can occur and a truck has enough time to drive
     ///directly to destination and be on time for drop-off. Takes into account
@@ -92,12 +93,40 @@ type IntervalsByCargoMap = HashMap<Cargo, IntervalChain>;
 #[pyclass]
 #[derive(Clone)]
 pub struct Schedule {
-    truck_transitions: HashMap<Truck, TransitionChain>,
+    truck_transitions: BTreeMap<Truck, TransitionChain>,
+
+    #[pyo3(get, set)]
     planned_cargo: HashSet<Cargo>,
+}
+
+#[pymethods]
+impl Schedule {
+    /// Generates a textual representation of the schedule
+    pub fn __repr__(&self) -> String {
+        let mut out = String::new();
+        for (truck, transitions) in self.truck_transitions.iter() {
+            out.push_str(&format!("Truck {truck}:\n"));
+            for transition in transitions.get_intervals().iter() {
+                let transition_info = transition.get_additional_data();
+                out.push_str(&format!(
+                    "[{}, {}]: Cargo {}: {}->{}",
+                    transition.get_start_time(),
+                    transition.get_end_time(),
+                    transition_info.cargo,
+                    transition_info.from,
+                    transition_info.to
+                ));
+            }
+            out.push_str("\n\n");
+        }
+        out
+    }
 }
 
 /// A map from (from_terminal, to_terminal) to cached driving times
 struct DrivingTimesCache {
+    // NOTE: assumes that driving from A to B might take a different time than
+    // driving from B to A
     data: DrivingTimesMap,
 }
 
@@ -106,6 +135,10 @@ impl DrivingTimesCache {
         Self {
             data: HashMap::new(),
         }
+    }
+
+    fn from_map(map: DrivingTimesMap) -> Self {
+        Self { data: map }
     }
 
     fn get_driving_time(&mut self, from: Terminal, to: Terminal) -> TimeDelta {
@@ -305,6 +338,8 @@ impl ScheduleGenerator {
 
         let mut cargo_delivery_info = HashMap::new();
 
+        let mut driving_times_map: DrivingTimesMap = HashMap::new();
+
         for transport_request in transport_data.iter() {
             let cargo = transport_request.cargo;
             // Pickup intervals that don't consider terminal opening times
@@ -346,6 +381,15 @@ impl ScheduleGenerator {
             pickup_times.insert(cargo, pickup_intervals);
             dropoff_times.insert(cargo, dropoff_intervals);
 
+            // Record driving times on direct routes
+            driving_times_map.insert(
+                (
+                    transport_request.from_terminal,
+                    transport_request.to_terminal,
+                ),
+                transport_request.direct_driving_time,
+            );
+
             // Update delivery info
             let delivery_info = CargoDeliveryInformation {
                 direct_driving_time: transport_request.direct_driving_time,
@@ -359,7 +403,7 @@ impl ScheduleGenerator {
         Ok(Self {
             terminal_open_intervals,
             transitions_by_intervals_cache: HashMap::new(),
-            driving_times_cache: DrivingTimesCache::new(),
+            driving_times_cache: DrivingTimesCache::from_map(driving_times_map),
             pickup_times,
             dropoff_times,
             cargo_delivery_info,
@@ -370,7 +414,7 @@ impl ScheduleGenerator {
     }
 
     pub fn empty_schedule(&self) -> Schedule {
-        let mut truck_transitions: HashMap<Truck, TransitionChain> = HashMap::new();
+        let mut truck_transitions: BTreeMap<Truck, TransitionChain> = BTreeMap::new();
         for truck in self.trucks.iter() {
             truck_transitions.insert(*truck, TransitionChain::new());
         }

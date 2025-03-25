@@ -94,8 +94,8 @@ def make_schedule_generator(
 
     # We can end once all terminals and dropoffs close
     end_time = min(
-        terminal_data["closing_time"].min(),
-        requested_transports["dropoff_close_time"].min(),
+        terminal_data["closing_time"].max(),
+        requested_transports["dropoff_close_time"].max(),
     )
 
     # TODO: a more intelligent calculation of planning period
