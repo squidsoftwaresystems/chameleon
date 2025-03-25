@@ -4,6 +4,7 @@ from typing import List
 import pandas as pd
 import pytest
 
+from src.metaheuristic.sa import sa_solve
 from src.metaheuristic.schedule import make_schedule_generator
 
 
@@ -59,3 +60,17 @@ def test_get_neighbours():
     # TODO: automatically check that the schedule is valid
     for _ in range(100):
         schedule = schedule_generator.get_schedule_neighbour(schedule, 100)
+
+
+def test_simulated_annealing():
+    (terminals, trucks, transports) = create_schedule_data()
+    schedule_generator = make_schedule_generator(terminals, trucks, transports)
+    schedule = schedule_generator.empty_schedule()
+    random.seed(0)
+
+    best_schedule, best_score = sa_solve(
+        initial_solution=schedule,
+        schedule_generator=schedule_generator,
+    )
+
+    assert best_score == 4.0

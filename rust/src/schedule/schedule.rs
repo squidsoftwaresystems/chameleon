@@ -109,7 +109,7 @@ impl Schedule {
             for transition in transitions.get_intervals().iter() {
                 let transition_info = transition.get_additional_data();
                 out.push_str(&format!(
-                    "[{}, {}]: Cargo {}: {}->{}",
+                    "[{}, {}]: Cargo {}: {}->{}\n",
                     transition.get_start_time(),
                     transition.get_end_time(),
                     transition_info.cargo,
@@ -120,6 +120,18 @@ impl Schedule {
             out.push_str("\n\n");
         }
         out
+    }
+
+    /// Returns a score representing how good the Schedule is
+    pub fn score(&self) -> f64 {
+        // Get the number of deliveries
+        let num_deliveries: usize = self
+            .truck_transitions
+            .values()
+            .map(|transition| transition.get_intervals().len())
+            .sum();
+
+        num_deliveries as f64
     }
 }
 

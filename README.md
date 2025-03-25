@@ -20,6 +20,7 @@ Then you can:
 - Run algorithms by themselves by running other scripts in subfolders of `evaluation/`
 
 ## Development:
+Don't forget to rebuild rust code with `maturin develop` after modifying it.
 
 The main code is under `src`, code for performance evaluation is under `evaluation`, code for unit tests is under `test`
 
