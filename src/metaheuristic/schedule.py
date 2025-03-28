@@ -1,122 +1,109 @@
-from abc import ABC
-from typing import List
+from typing import Dict, List, Tuple, cast
 
 import pandas as pd
 
+import chameleon_rust
+from chameleon_rust import TransportRequest
 
-class Event(ABC):
-    """
-    Timestamp (and additional information) of an event at a terminal
-    """
-    
-    time = None
+# TODO: collapse 2 consecutive empty transports into 1
 
+Time = int
+TimeDelta = int
 
-class TerminalOpeningEvent(Event):
-    """
-    Event of terminal starting work in some day
-    """
-    pass
+Terminal = int
+Cargo = int
+Truck = int
 
 
-class TerminalClosingEvent(Event):
+def make_schedule_generator(
+    terminal_data: pd.DataFrame,
+    truck_data: pd.DataFrame,
+    requested_transports: pd.DataFrame,
+) -> chameleon_rust.ScheduleGenerator:
     """
-    Event of terminal finishing work in some day
-    """
-    pass
+    Creates a blank schedule, given dataframes for data
 
+    :param terminal_data: dataframe on terminals
+        Index:
+            pd.Index, dtype=int64: id of the terminal
+        Columns:
+            Name: opening_time,     dtype: datatime64[ns], in minutes
+            Name: closing_time,     dtype: datatime64[ns], in minutes
 
-class CargoPickupOpenEvent(Event):
-    """
-    Event signalling beginning of cargo pickup slot
-    """
-    pass
+    :param truck_data: dataframe on trucks
+        Index:
+            pd.Index, dtype=int64: id of the truck
+        Columns:
+            Name: starting_terminal,     dtype: int64      terminal where
+            truck starts at the beginning of the day
 
-
-class CargoPickupCloseEvent(Event):
-    """
-    Event signalling ending of cargo pickup slot
-    """
-    pass
-
-
-class CargoDropoffOpenEvent(Event):
-    """
-    Event signalling beginning of cargo dropoff slot
-    """
-    pass
-
-
-class CargoDropoffCloseEvent(Event):
-    """
-    Event signalling ending of cargo dropoff slot
-    """
-    pass
-
-
-class TruckUnloadedEvent(Event):
-    """
-    Event signalling that a truck has arrived to this terminal and unloaded its cargo
+    :param requested_transports: dataframe on transports
+        Index:
+            pd.Index, dtype=int64: id of the transports (one leg of the journey)
+        Columns:
+            Name: cargo,                dtype: int64            id of cargo to be transported
+            Name: from_terminal,        dtype: int64            id of terminal to be transported from
+            Name: to_terminal,          dtype: int64            id of terminal to be transported to
+            Name: pickup_open_time,     dtype: datetime64[ns]   Time from which cargo can be picked up
+            Name: pickup_close_time,    dtype: datetime64[ns]  Time before which cargo must be picked up
+            Name: dropoff_open_time,    dtype: datetime64[ns]  Time from which cargo can be dropped off
+            Name: dropoff_close_time,   dtype: datetime64[ns] Time before which cargo must be dropped off
+            Name: driving_time,      dtype: timedelta64[ns]
     """
 
-    # TODO: add code which distinguishes between trucks of same type
-    # truck = None
+    def timestamp_to_seconds(timestamp: pd.Timestamp):
+        return int(timestamp.timestamp())
 
-    origin_terminal = None
-    "Index of terminal that the truck came from"
+    def timedelta_to_seconds(timestamp: pd.Timedelta):
+        return int(timestamp.total_seconds())
 
-    unload_time: int
-    """
-    Length of time in minutes it took to unload cargo from truck.
-    Time of event = time when truck arrived + unload_time
-    """
+    # Repack the data into the format used by the bindings
+    _terminal_data: Dict[Terminal, Tuple[Time, Time]] = {
+        cast(int, terminal): (
+            timestamp_to_seconds(row["opening_time"]),
+            timestamp_to_seconds(row["closing_time"]),
+        )
+        for terminal, row in terminal_data.iterrows()
+    }
 
+    _truck_data: Dict[Truck, Terminal] = {
+        cast(int, truck): row["starting_terminal"]
+        for truck, row in truck_data.iterrows()
+    }
 
-class TruckReadyToLoadEvent(Event):
-    """
-    Event signalling that a truck has loaded its cargo and has left for a delivery
-    """
+    _transpost_data: List[TransportRequest] = [
+        TransportRequest(
+            cargo=row["cargo"],
+            from_terminal=row["from_terminal"],
+            to_terminal=row["to_terminal"],
+            pickup_open_time=timestamp_to_seconds(row["pickup_open_time"]),
+            pickup_close_time=timestamp_to_seconds(row["pickup_close_time"]),
+            dropoff_open_time=timestamp_to_seconds(row["dropoff_open_time"]),
+            dropoff_close_time=timestamp_to_seconds(row["dropoff_close_time"]),
+            direct_driving_time=timedelta_to_seconds(row["driving_time"]),
+        )
+        for transport_id, row in requested_transports.iterrows()
+    ]
 
-    # TODO: add code which distinguishes between trucks of same type
-    # truck = None
+    # The first time when we can do anything is when
+    # cargo becomes available and a terminal opens
+    start_time = max(
+        terminal_data["opening_time"].min(),
+        requested_transports["pickup_open_time"].min(),
+    )
 
-    destination_terminal = None
-    "Index of terminal that the truck is going to"
+    # We can end once all terminals and dropoffs close
+    end_time = min(
+        terminal_data["closing_time"].max(),
+        requested_transports["dropoff_close_time"].max(),
+    )
 
-    load_time: int
-    """
-    Length of time in minutes it took to load cargo onto truck.
-    Time of event = time when truck left - load_time
-    """
+    # TODO: a more intelligent calculation of planning period
+    _planning_period: Tuple[Time, Time] = (
+        timestamp_to_seconds(start_time),
+        timestamp_to_seconds(end_time),
+    )
 
-
-class Schedule:
-    """
-    A class representing a timetable for deliveries which
-    doesn't violate hard constraints
-    """
-
-    terminal_events: List[Event]
-
-    # TODO: store cargo s.t. it is easy to retrieve available cargo in
-    # terminal based on time or cargo on truck based on time,
-    # and easy to change/remove/add cargo also check for cargo weight, size
-    terminal_cargo_df: pd.DataFrame
-    """
-    A dataframe containing information about cargo in terminals.
-    Each entry contains time interval over which cargo is in the terminal and the terminal
-    """
-
-    truck_cargo_df: pd.DataFrame
-    """
-    A dataframe containing information about cargo in trucks.
-    Each entry contains time interval over which cargo is in the truck and the truck
-    """
-
-    def get_number_of_deliveries(self):
-        """
-        Returns number of deliveries in the schedule
-
-        :returns: the number of cargo items delivered under this schedule
-        :rtype: int
-        """
+    return chameleon_rust.ScheduleGenerator(
+        _terminal_data, _truck_data, _transpost_data, _planning_period
+    )
