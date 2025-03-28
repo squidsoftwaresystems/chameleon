@@ -1,7 +1,9 @@
 import requests
 import pandas as pd
 import os
-from . import API_KEY
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class SquidAPI:
@@ -12,9 +14,10 @@ class SquidAPI:
 
     def __init__(self, day: str = None):
         # Initialize API credentials and endpoints
-        self.__API_KEY = API_KEY
+        self.__API_KEY = os.getenv("API-KEY")
         if self.__API_KEY is None:
             raise ValueError("API-KEY not found in environment variables")
+
         self.__API_URL = "https://api.squid.software"
 
         # Define paths for cached data files
