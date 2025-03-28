@@ -12,7 +12,7 @@ class SquidAPI:
     Handles data fetching, caching, and provides access methods for logistics entities.
     """
 
-    def __init__(self, day: str = None):
+    def __init__(self, day: Optional[str] = None):
         # Initialize API credentials and endpoints
         self.__API_KEY = os.getenv("API-KEY")
         if self.__API_KEY is None:
@@ -132,7 +132,7 @@ class SquidAPI:
             )
             self.trucks.to_csv(self.__TRUCKPATH)
 
-    def __processSchedules(self, schedules: list[dict]):
+    def __processSchedules(self, schedules: List[Dict]):
         """Transform raw schedule data into a usable DataFrame structure"""
         # For each schedule, remove deleted ones, created and updated ids
         # and flatten the inner repeat (if not deleted) object to just the
@@ -377,7 +377,7 @@ class SquidAPI:
             self.routes = pd.DataFrame()
 
     # LOCATION GETTERS
-    def getLocations(self, country: str = None, type: str = None):
+    def getLocations(self, country: Optional[str] = None, type: Optional[str] = None):
         """Retrieve locations with optional filtering by country or type"""
         ret = self.locations
         if country is not None:
@@ -398,12 +398,12 @@ class SquidAPI:
     # TRUCK GETTERS
     def getTrucks(
         self,
-        adr: bool = None,
-        lzv: bool = None,
-        capacity: int = None,
-        obu_germany: bool = None,
-        obu_belgium: bool = None,
-        euroorm: int = None,
+        adr: Optional[bool] = None,
+        lzv: Optional[bool] = None,
+        capacity: Optional[int] = None,
+        obu_germany: Optional[bool] = None,
+        obu_belgium: Optional[bool] = None,
+        euroorm: Optional[int] = None,
     ):
         """Retrieve trucks with multiple optional filtering parameters"""
         ret = self.trucks
@@ -432,10 +432,10 @@ class SquidAPI:
     # DRIVER GETTERS
     def getDrivers(
         self,
-        available: bool = None,
-        adr: bool = None,
-        tank_adr: bool = None,
-        lzv: bool = None,
+        available: Optional[bool] = None,
+        adr: Optional[bool] = None,
+        tank_adr: Optional[bool] = None,
+        lzv: Optional[bool] = None,
     ):
         """Retrieve drivers with optional filtering by availability and qualifications"""
         ret = self.drivers
@@ -483,13 +483,13 @@ class SquidAPI:
     # CHASSIS GETTERS
     def getChassis(
         self,
-        license_plate: str = None,
-        type: str = None,
-        owner_id: str = None,
-        location_id: str = None,
-        lzv: bool = None,
-        adr: bool = None,
-        available: bool = None,
+        license_plate: Optional[str] = None,
+        type: Optional[str] = None,
+        owner_id: Optional[str] = None,
+        location_id: Optional[str] = None,
+        lzv: Optional[bool] = None,
+        adr: Optional[bool] = None,
+        available: Optional[bool] = None,
     ):
         """Retrieve chassis with multiple optional filtering parameters"""
         ret = self.chassis
