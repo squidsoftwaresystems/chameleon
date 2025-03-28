@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import os
 from dotenv import load_dotenv
+from typing import Optional, List, Dict
 
 load_dotenv()
 
@@ -19,6 +20,7 @@ class SquidAPI:
             raise ValueError("API-KEY not found in environment variables")
 
         self.__API_URL = "https://api.squid.software"
+        self.__OSRM_URL = "https://osrm.squid.software"
 
         # Define paths for cached data files
         self.__LOCATIONPATH = "../../data/locations.csv"
@@ -65,6 +67,13 @@ class SquidAPI:
             offset += page_size
 
         return all_results
+
+    def __osrm_call(self, endpoint: str, args: Optional[str] = ""):
+        """Make a single API request to the OSRM endpoint"""
+        return requests.get(
+            f"{self.__OSRM_URL}/{endpoint}?{args}",
+            headers={"Api-Key": f"Bearer: {self.__API_KEY}"},
+        ).json()
 
     def __fetchLocations(self):
         """Fetch or load location data from cache"""
@@ -620,3 +629,40 @@ class SquidAPI:
     def getRouteByLocation(self, location_id: str):
         """Find routes that include a specific location"""
         return self.routes[self.routes.location_id == location_id]
+
+    def getPortOpenTimes(self):
+        """Get all port opening and closing times"""
+        return self.locations[self.locations.type == "port"].loc[
+            :, ["open_from", "open_to"]
+        ]
+
+    def getTruckHomeLocations(self):
+        """Get the home locations of all trucks"""
+        return self.trucks[self.trucks.home.notna()]["home"]
+
+    def getPortTransportDetails(self):
+        """Get all transports for ports"""
+
+        return (
+            # Merge transports with bookings using booking_id
+            pd.merge(
+                # Filter to only include port transports with a planner_id
+                self.transports[
+                    self.transports.planner_id.notna()
+                    and self.transports.area == "port"
+                ].loc[:, ["planner_id", "booking_id"]],
+                # Extract relevant columns from bookings
+                self.bookings.loc[
+                    :,
+                    [
+                        "first_pickup",
+                        "last_pickup",
+                        "cargo_opening",
+                        "cargo_closing",
+                        "delivery_datetime",
+                    ],
+                ],
+                left_on="booking_id",
+                right_index=True,
+            )
+        )
