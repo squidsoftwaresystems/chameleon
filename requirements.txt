@@ -1,5 +1,6 @@
 blinker==1.9.0
 certifi==2025.1.31
+-e git+ssh://git@github.com/squidsoftwaresystems/chameleon.git@3e53c893d62a1fe76016aea5d23c5a178166a8e7#egg=chameleon
 charset-normalizer==3.4.1
 click==8.1.8
 Flask==3.1.0
@@ -8,17 +9,22 @@ iniconfig==2.0.0
 itsdangerous==2.2.0
 Jinja2==3.1.5
 MarkupSafe==3.0.2
+maturin==1.8.3
+mypy==1.15.0
 mypy-extensions==1.0.0
 numpy==2.2.3
 packaging==24.2
 pandas==2.2.3
+pandas-stubs==2.2.3.250308
 pluggy==1.5.0
+pyproject-metadata==0.9.1
 pytest==8.3.5
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 pytz==2025.1
 requests==2.32.3
 six==1.17.0
+types-pytz==2025.1.0.20250204
 typing_extensions==4.12.2
 tzdata==2025.1
 urllib3==2.3.0
