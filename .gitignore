@@ -171,5 +171,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# clangd files
-compile_commands.json
+# Cached Data
+data/
