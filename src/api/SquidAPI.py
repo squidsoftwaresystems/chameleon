@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from dotenv import load_dotenv
 from typing import Optional, List, Dict, Union
+from datetime import date, datetime
 
 load_dotenv()
 
@@ -252,7 +253,7 @@ class SquidAPI:
             )
             self.chassis.to_csv(self.__CHASSISPATH)
 
-    def __fetchBookings(self, day: str):
+    def __fetchBookings(self, day: Optional[date] = None):
         """
         Fetch or load booking data and related transport/route information.
         Optionally filter by date of first pickup.
@@ -273,9 +274,11 @@ class SquidAPI:
 
         # Fetch the data from the API
         if day:
+            # Convert date to string format for API query
+            query_date = day.strftime("%Y-%m-%d")
             res = self.__paginated_api_call(
                 "bookings",
-                f"deleted=false&first_pickup=>{day}T00:00:00Z",
+                f"deleted=false&first_pickup>{query_date}T00:00:00",
             )
         else:
             res = self.__paginated_api_call("bookings", "deleted=false")
@@ -357,6 +360,21 @@ class SquidAPI:
             self.bookings.drop(
                 columns=["deleted", "created", "updated"], errors="ignore", inplace=True
             )
+            self.bookings["first_pickup"] = pd.to_datetime(
+                self.bookings["first_pickup"], errors="coerce"
+            )
+            self.bookings["last_pickup"] = pd.to_datetime(
+                self.bookings["last_pickup"], errors="coerce"
+            )
+            self.bookings["cargo_opening"] = pd.to_datetime(
+                self.bookings["cargo_opening"], errors="coerce"
+            )
+            self.bookings["cargo_closing"] = pd.to_datetime(
+                self.bookings["cargo_closing"], errors="coerce"
+            )
+            self.bookings["delivery_datetime"] = pd.to_datetime(
+                self.bookings["delivery_datetime"], errors="coerce"
+            )
             self.bookings.to_csv(self.__BOOKINGSPATH)
         else:
             self.bookings = pd.DataFrame()
@@ -366,6 +384,12 @@ class SquidAPI:
             self.transports.set_index("id", inplace=True)
             self.transports.drop(
                 columns=["deleted", "created", "updated"], errors="ignore", inplace=True
+            )
+            self.transports["start"] = pd.to_datetime(
+                self.transports["start"], errors="coerce"
+            )
+            self.transports["end"] = pd.to_datetime(
+                self.transports["end"], errors="coerce"
             )
             self.transports.to_csv(self.__TRANSPORTSPATH)
         else:
@@ -386,6 +410,18 @@ class SquidAPI:
                 ],
                 errors="ignore",
                 inplace=True,
+            )
+            self.routes["estimated_arrival"] = pd.to_datetime(
+                self.routes["estimated_arrival"], errors="coerce"
+            )
+            self.routes["estimated_departure"] = pd.to_datetime(
+                self.routes["estimated_departure"], errors="coerce"
+            )
+            self.routes["planned_arrival"] = pd.to_datetime(
+                self.routes["planned_arrival"], errors="coerce"
+            )
+            self.routes["planned_departure"] = pd.to_datetime(
+                self.routes["planned_departure"], errors="coerce"
             )
             self.routes.to_csv(self.__ROUTESPATH)
         else:
@@ -592,7 +628,7 @@ class SquidAPI:
             routes.append(self.getRoutesForTransport(transport.id))
         return pd.concat(routes) if routes else pd.DataFrame()
 
-    def getBookingsByCargoWindow(self, start: str, end: str) -> pd.DataFrame:
+    def getBookingsByCargoWindow(self, start: datetime, end: datetime) -> pd.DataFrame:
         """Find bookings with cargo windows within the specified time range"""
         return self.bookings[
             (self.bookings.notna(start) and self.bookings.notna(end))
@@ -600,7 +636,7 @@ class SquidAPI:
             & (self.bookings.cargo_closing <= end)
         ]
 
-    def getBookingsByPickupWindow(self, start: str, end: str) -> pd.DataFrame:
+    def getBookingsByPickupWindow(self, start: datetime, end: datetime) -> pd.DataFrame:
         """Find bookings with pickup windows within the specified time range"""
         return self.bookings[
             (self.bookings.notna(start) and self.bookings.notna(end))
@@ -608,20 +644,20 @@ class SquidAPI:
             & (self.bookings.pickup_closing <= end)
         ]
 
-    def getBookingsByCargoDay(self, day: str) -> pd.DataFrame:
+    def getBookingsByCargoDay(self, day: date) -> pd.DataFrame:
         """Find bookings with cargo operations scheduled on a specific day"""
         return self.bookings[
             (self.bookings.notna(day))
-            & (self.bookings.cargo_opening.str.startswith(day))
-            & (self.bookings.cargo_closing.str.startswith(day))
+            & (self.bookings.cargo_opening.dt.date == day)
+            & (self.bookings.cargo_closing.dt.date == day)
         ]
 
-    def getBookingsByPickupDay(self, day: str) -> pd.DataFrame:
+    def getBookingsByPickupDay(self, day: datetime) -> pd.DataFrame:
         """Find bookings with pickups scheduled on a specific day"""
         return self.bookings[
             (self.bookings.notna(day))
-            & (self.bookings.pickup_opening.str.startswith(day))
-            & (self.bookings.pickup_closing.str.startswith(day))
+            & (self.bookings.pickup_opening.dt.date == day)
+            & (self.bookings.pickup_closing.dt.date == day)
         ]
 
     def getBookingByLocation(self, location_id: str) -> pd.DataFrame:
