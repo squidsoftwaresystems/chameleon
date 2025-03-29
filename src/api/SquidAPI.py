@@ -2,7 +2,7 @@ import requests
 import pandas as pd
 import os
 from dotenv import load_dotenv
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 
 load_dotenv()
 
@@ -72,7 +72,7 @@ class SquidAPI:
         """Make a single API request to the OSRM endpoint"""
         return requests.get(
             f"{self.__OSRM_URL}/{endpoint}?{args}",
-            headers={"Api-Key": f"Bearer: {self.__API_KEY}"},
+            headers={"Api-Key": f"Bearer {self.__API_KEY}"},
         ).json()
 
     def __fetchLocations(self):
@@ -666,3 +666,92 @@ class SquidAPI:
                 right_index=True,
             )
         )
+
+    def getCoordDist(
+        self, coords: List[List[float]]
+    ) -> Optional[Dict[str, Union[float, List[Dict[str, float]]]]]:
+        """
+        Get the distance between (long,lat) pairs using OSRM
+
+        Returns the total distance and duration of the route, as well as the
+        distance and duration of each leg of the journey
+        """
+        if len(coords) < 2:
+            return None
+        res = self.__osrm_call("route", f"coordinates={coords}")
+        ret = {
+            "distance": res["routes"][0]["distance"],
+            "duration": res["routes"][0]["duration"],
+            "legs": [],
+        }
+        for leg in res["routes"][0]["legs"]:
+            ret["legs"].append(
+                {"distance": leg["distance"], "duration": leg["duration"]}
+            )
+        return ret
+
+    def getCodeDist(
+        self, codes: List[str]
+    ) -> Optional[List[Union[float, List[float]]]]:
+        """
+        Get the distance between locations using their codes
+        """
+        coords = []
+        for code in codes:
+            loc = self.getLocation(code)
+            if loc is None:
+                return None
+            coords.append([loc.longitude, loc.latitude])
+
+        return self.getCoordDist(coords)
+
+    def getTransportDist(
+        self, id: str
+    ) -> Optional[Dict[str, Union[float, List[Dict[str, float]]]]]:
+        """
+        Get the distance of a transport using its ID
+        """
+        coords = []
+        route_stops = []
+        # Get all routes for the transport
+        for _, route in self.getRoutesForTransport(id).iterrows():
+            route_stops.append([route["index"], route.location_id])
+
+        # Sort routes by index
+        route_stops = sorted(route_stops, key=lambda x: x[0])
+
+        # Get the coordinates for each location in the route
+        for _, loc_id in route_stops:
+            loc = self.getLocationById(loc_id)
+            if loc is None:
+                return None
+            coords.append([loc.longitude, loc.latitude])
+
+        return self.getCoordDist(coords)
+
+    def getCoordMatrix(
+        self, coords: List[List[float]]
+    ) -> Optional[Dict[str, List[List[float]]]]:
+        """
+        Get the distance matrix between (long,lat) pairs using OSRM
+        """
+        if len(coords) < 2:
+            return None
+        res = self.__osrm_call("table", f"coordinates={coords}")
+        return {
+            "distances": res["distances"],
+            "durations": res["durations"],
+        }
+
+    def getCodeMatrix(self, codes: List[str]) -> Optional[Dict[str, List[List[float]]]]:
+        """
+        Get the distance matrix between locations using their codes
+        """
+        coords = []
+        for code in codes:
+            loc = self.getLocation(code)
+            if loc is None:
+                return None
+            coords.append([loc.longitude, loc.latitude])
+
+        return self.getCoordMatrix(coords)
