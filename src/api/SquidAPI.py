@@ -240,7 +240,13 @@ class SquidAPI:
             self.chassis = pd.DataFrame(res)
             self.chassis.set_index("id", inplace=True)
             self.chassis.drop(
-                labels=["deleted", "created", "description", "road_certified"],
+                labels=[
+                    "deleted",
+                    "created",
+                    "updated",
+                    "description",
+                    "road_certified",
+                ],
                 axis=1,
                 inplace=True,
             )
