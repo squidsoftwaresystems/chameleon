@@ -578,7 +578,7 @@ class SquidAPI:
         """Find a route by ID"""
         return self.routes.loc[id]
 
-    def getRoutesForBooking(self, booking_id: str):
+    def getRoutesForBooking(self, booking_id: str) -> pd.DataFrame:
         """Retrieve all routes associated with a specific booking"""
         transports = self.getTransportsForBooking(booking_id)
         routes = []
@@ -586,7 +586,7 @@ class SquidAPI:
             routes.append(self.getRoutesForTransport(transport.id))
         return pd.concat(routes) if routes else pd.DataFrame()
 
-    def getBookingsByCargoWindow(self, start: str, end: str):
+    def getBookingsByCargoWindow(self, start: str, end: str) -> pd.DataFrame:
         """Find bookings with cargo windows within the specified time range"""
         return self.bookings[
             (self.bookings.notna(start) and self.bookings.notna(end))
@@ -594,7 +594,7 @@ class SquidAPI:
             & (self.bookings.cargo_closing <= end)
         ]
 
-    def getBookingsByPickupWindow(self, start: str, end: str):
+    def getBookingsByPickupWindow(self, start: str, end: str) -> pd.DataFrame:
         """Find bookings with pickup windows within the specified time range"""
         return self.bookings[
             (self.bookings.notna(start) and self.bookings.notna(end))
@@ -602,7 +602,7 @@ class SquidAPI:
             & (self.bookings.pickup_closing <= end)
         ]
 
-    def getBookingsByCargoDay(self, day: str):
+    def getBookingsByCargoDay(self, day: str) -> pd.DataFrame:
         """Find bookings with cargo operations scheduled on a specific day"""
         return self.bookings[
             (self.bookings.notna(day))
@@ -610,7 +610,7 @@ class SquidAPI:
             & (self.bookings.cargo_closing.str.startswith(day))
         ]
 
-    def getBookingsByPickupDay(self, day: str):
+    def getBookingsByPickupDay(self, day: str) -> pd.DataFrame:
         """Find bookings with pickups scheduled on a specific day"""
         return self.bookings[
             (self.bookings.notna(day))
@@ -618,29 +618,29 @@ class SquidAPI:
             & (self.bookings.pickup_closing.str.startswith(day))
         ]
 
-    def getBookingByLocation(self, location_id: str):
+    def getBookingByLocation(self, location_id: str) -> pd.DataFrame:
         """Find bookings for a specific delivery location"""
         return self.bookings[self.bookings.delivery_location_id == location_id]
 
-    def getTransportByPlanner(self, planner_id: str):
+    def getTransportByPlanner(self, planner_id: str) -> pd.DataFrame:
         """Find transports assigned to a specific planner"""
         return self.transports[self.transports.planner_id == planner_id]
 
-    def getRouteByLocation(self, location_id: str):
+    def getRouteByLocation(self, location_id: str) -> pd.DataFrame:
         """Find routes that include a specific location"""
         return self.routes[self.routes.location_id == location_id]
 
-    def getPortOpenTimes(self):
+    def getPortOpenTimes(self) -> pd.DataFrame:
         """Get all port opening and closing times"""
         return self.locations[self.locations.type == "port"].loc[
             :, ["open_from", "open_to"]
         ]
 
-    def getTruckHomeLocations(self):
+    def getTruckHomeLocations(self) -> pd.Series:
         """Get the home locations of all trucks"""
         return self.trucks[self.trucks.home.notna()]["home"]
 
-    def getPortTransportDetails(self):
+    def getPortTransportDetails(self) -> pd.DataFrame:
         """Get all transports for ports"""
 
         return (
