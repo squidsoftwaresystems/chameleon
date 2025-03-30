@@ -32,10 +32,12 @@ class SquidAPI:
         self.__BOOKINGSPATH = "../../data/bookings.csv"
         self.__TRANSPORTSPATH = "../../data/transports.csv"
         self.__ROUTESPATH = "../../data/routes.csv"
+        self.__TRUCKSTARTSPATH = "../../data/truck_starts.csv"
 
         # Load or fetch all required data
         self.__fetchLocations()
         self.__fetchTrucks()
+        self.__fetchTruckStarts()
         self.__fetchDrivers()
         self.__fetchChassis()
         self.__fetchBookings(day)
@@ -139,6 +141,18 @@ class SquidAPI:
             )
             self.trucks["number"] = self.trucks["number"].astype(int)
             self.trucks.to_csv(self.__TRUCKPATH)
+
+    def __fetchTruckStarts(self):
+        """Load cached truck start locations and times"""
+
+        # Assume the data does not need to be fetched, it is already saved.
+        if os.path.exists(self.__TRUCKSTARTSPATH):
+            self.truck_starts = pd.read_csv(self.__TRUCKSTARTSPATH)
+            self.truck_starts.set_index("id", inplace=True)
+        else:
+            raise ValueError(
+                "Truck starts data not found. Please fetch the data first."
+            )
 
     def __processSchedules(self, schedules: List[Dict]):
         """Transform raw schedule data into a usable DataFrame structure"""
@@ -505,6 +519,24 @@ class SquidAPI:
     def getDriverById(self, id: str):
         """Find a driver by ID"""
         return self.drivers.loc[id]
+
+    # GET TRUCK STARTS
+    def getTruckStarts(self):
+        """Retrieve all truck starts"""
+        return self.truck_starts
+
+    def getTruckStartById(self, id: str):
+        """Find a truck start by ID"""
+        return self.truck_starts.loc[id]
+
+    def getTruckStartByNumber(self, number: int):
+        """Find a truck start by truck number"""
+        # First, get the id of the truck with that number, then find that id in the truck_starts
+        # Remember that id is the index so is not accessible by loc
+        truck = self.trucks.index[self.trucks["number"] == number]
+        if len(truck) == 0:
+            return None
+        return self.truck_starts.loc[truck[0]]
 
     # SCHEDULE GETTERS
     def getSchedules(self):
