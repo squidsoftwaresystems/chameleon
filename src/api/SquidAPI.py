@@ -137,9 +137,7 @@ class SquidAPI:
                 axis=1,
                 inplace=True,
             )
-            self.trucks["capacity"] = (
-                self.trucks["loading_capacity"] - self.trucks["weight"]
-            )
+            self.trucks["number"] = self.trucks["number"].astype(int)
             self.trucks.to_csv(self.__TRUCKPATH)
 
     def __processSchedules(self, schedules: List[Dict]):
