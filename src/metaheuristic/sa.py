@@ -5,22 +5,6 @@ import sys
 from chameleon_rust import Schedule, ScheduleGenerator
 
 
-class RunningAverage:
-    N: int
-    avg: float
-
-    def __init__(self):
-        self.N = 0
-        self.avg = 0
-
-    def update(self, new_value: float):
-        self.avg = self.N / (self.N + 1) * self.avg + new_value / (self.N + 1)
-        self.N += 1
-
-    def get_avg(self) -> float:
-        return self.avg
-
-
 def sa_solve(
     initial_solution: Schedule,
     schedule_generator: ScheduleGenerator,
@@ -28,7 +12,7 @@ def sa_solve(
     final_temperature: float = 1e-3,
     alpha: float = 0.99,
     max_iterations: int = 10000,
-    num_tries: int = 100,
+    num_tries_per_action: int = 10,
 ) -> Schedule:
     """
     This simulated annealing algorithm optimises a given objective function
@@ -46,8 +30,6 @@ def sa_solve(
     current_solution: Schedule = initial_solution
     current_score: float = initial_solution.score()
 
-    average_delta_magnitude = RunningAverage()
-
     best_solution = current_solution
     best_score = current_score
 
@@ -57,14 +39,12 @@ def sa_solve(
 
     while temperature > final_temperature and iteration < max_iterations:
         new_solution = schedule_generator.get_schedule_neighbour(
-            current_solution, num_tries
+            current_solution, num_tries_per_action
         )  # generate a new candidate solution
 
         new_score = new_solution.score()
 
         delta = new_score - current_score  # calculate 'energy difference'
-
-        average_delta_magnitude.update(abs(delta))
 
         # decide whether to accept the new solution
         if delta > 0:  # if new solution is better, always accept
@@ -72,9 +52,7 @@ def sa_solve(
             current_score = new_score
         else:  # accept with a probability depending on the temperature
             try:
-                # use the average score to put the current score into context
-                ratio = new_score / average_delta_magnitude.get_avg()
-                acceptance_probability = math.exp(-ratio / temperature)
+                acceptance_probability = math.exp(-new_score / temperature)
             except OverflowError:
                 acceptance_probability = sys.float_info.max
             if random.random() < acceptance_probability:

@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pyo3::{exceptions::PyTypeError, pyclass, pymethods, FromPyObject, PyResult};
-use rand::{seq::IndexedRandom, Rng};
+use rand::{rngs::ThreadRng, seq::IteratorRandom, Rng};
 
 use super::intervals::*;
 
@@ -13,21 +13,10 @@ type Terminal = u64;
 type Cargo = u64;
 type Truck = u64;
 
-/// A class representing information for a transition other than time
-#[derive(PartialEq, Eq, Clone, Debug)]
-pub struct TransitionInfo {
-    from: Terminal,
-    to: Terminal,
-    cargo: Cargo,
-}
-
-pub type Transition = IntervalWithData<TransitionInfo>;
-pub type TransitionChain = IntervalWithDataChain<TransitionInfo>;
-
 #[pyclass]
 #[derive(FromPyObject)]
 /// The representation of request for delivery that the rust code gets from python
-pub struct TransportRequest {
+pub struct Booking {
     #[pyo3(get, set)]
     cargo: Cargo,
     #[pyo3(get, set)]
@@ -47,7 +36,7 @@ pub struct TransportRequest {
 }
 
 #[pymethods]
-impl TransportRequest {
+impl Booking {
     #[new]
     pub fn new(
         cargo: Cargo,
@@ -73,13 +62,7 @@ impl TransportRequest {
 }
 
 #[derive(Debug)]
-struct CargoDeliveryInformation {
-    ///Times during which a pickup can occur and a truck has enough time to drive
-    ///directly to destination and be on time for drop-off. Takes into account
-    ///e.g. terminals closing overnight
-    direct_delivery_start_times: IntervalChain,
-    direct_driving_time: TimeDelta,
-
+struct BookingInformation {
     /// Terminal where cargo can be picked up from
     from: Terminal,
     /// Terminal where cargo needs to be dropped off to
@@ -87,16 +70,88 @@ struct CargoDeliveryInformation {
 }
 
 type DrivingTimesMap = HashMap<(Terminal, Terminal), TimeDelta>;
-type TransitionsByIntervalsMap = HashMap<(Terminal, Terminal, Interval), Vec<Transition>>;
 type IntervalsByCargoMap = HashMap<Cargo, IntervalChain>;
+
+/// An operation that the truck needs to carry out
+#[derive(Clone)]
+struct Checkpoint {
+    time: Time,
+    // Needs to be at this terminal
+    terminal: Terminal,
+    pickup_cargo: BTreeSet<Cargo>,
+    dropoff_cargo: BTreeSet<Cargo>,
+}
+
+#[derive(Clone)]
+#[pyclass]
+pub enum ScheduledCargoState {
+    PickedUp(Truck),
+    Delivered(Truck),
+}
+
+impl ScheduledCargoState {
+    pub fn is_picked_up_not_delivered(&self) -> bool {
+        if let ScheduledCargoState::PickedUp(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_delivered(&self) -> bool {
+        if let ScheduledCargoState::Delivered(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_truck(&self) -> Truck {
+        match self {
+            ScheduledCargoState::PickedUp(truck) => *truck,
+            ScheduledCargoState::Delivered(truck) => *truck,
+        }
+    }
+}
 
 #[pyclass]
 #[derive(Clone)]
 pub struct Schedule {
-    truck_transitions: BTreeMap<Truck, TransitionChain>,
+    truck_checkpoints: BTreeMap<Truck, Vec<Checkpoint>>,
 
+    // Map from cargo that was scheduled to details on how it was processed
     #[pyo3(get, set)]
-    planned_cargo: HashSet<Cargo>,
+    scheduled_cargo_state: BTreeMap<Cargo, ScheduledCargoState>,
+}
+
+impl Schedule {
+    fn get_checkpoint_mut(
+        &mut self,
+        truck: Truck,
+        checkpoint_index: usize,
+    ) -> Option<&mut Checkpoint> {
+        self.truck_checkpoints
+            .get_mut(&truck)?
+            .get_mut(checkpoint_index)
+    }
+
+    /// Finds latest checkpoint strictly before `time` for truck
+    /// and earliest checkpoint strictly after `time`
+    fn get_surrounding_checkpoints(
+        &self,
+        truck: Truck,
+        time: Time,
+    ) -> (Option<&Checkpoint>, Option<&Checkpoint>) {
+        let checkpoints = self.truck_checkpoints.get(&truck).unwrap();
+
+        let prev = checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.time < time);
+        let next = checkpoints.iter().find(|checkpoint| checkpoint.time > time);
+
+        (prev, next)
+    }
 }
 
 #[pymethods]
@@ -104,17 +159,17 @@ impl Schedule {
     /// Generates a textual representation of the schedule
     pub fn __repr__(&self) -> String {
         let mut out = String::new();
-        for (truck, transitions) in self.truck_transitions.iter() {
+        for (truck, checkpoints) in self.truck_checkpoints.iter() {
             out.push_str(&format!("Truck {truck}:\n"));
-            for transition in transitions.get_intervals().iter() {
-                let transition_info = transition.get_additional_data();
+            for checkpoint in checkpoints.iter() {
                 out.push_str(&format!(
-                    "[{}, {}]: Cargo {}: {}->{}\n",
-                    transition.get_start_time(),
-                    transition.get_end_time(),
-                    transition_info.cargo,
-                    transition_info.from,
-                    transition_info.to
+                    "Time: {}, Terminal {}: Pick up {:?}, drop off {:?}\n",
+                    checkpoint.time,
+                    checkpoint.terminal,
+                    // Display as vector
+                    checkpoint.pickup_cargo.iter().collect::<Vec<_>>(),
+                    // Display as vector
+                    checkpoint.dropoff_cargo.iter().collect::<Vec<_>>(),
                 ));
             }
             out.push_str("\n\n");
@@ -126,10 +181,10 @@ impl Schedule {
     pub fn score(&self) -> f64 {
         // Get the number of deliveries
         let num_deliveries: usize = self
-            .truck_transitions
+            .scheduled_cargo_state
             .values()
-            .map(|transition| transition.get_intervals().len())
-            .sum();
+            .filter(|state| state.is_delivered())
+            .count();
 
         num_deliveries as f64
     }
@@ -143,12 +198,6 @@ struct DrivingTimesCache {
 }
 
 impl DrivingTimesCache {
-    fn new() -> Self {
-        Self {
-            data: HashMap::new(),
-        }
-    }
-
     fn from_map(map: DrivingTimesMap) -> Self {
         Self { data: map }
     }
@@ -172,14 +221,9 @@ impl DrivingTimesCache {
 /// Class with logic and data needed to create schedules
 #[pyclass]
 pub struct ScheduleGenerator {
-    /// Intervals when the terminals are open
-    terminal_open_intervals: HashMap<Terminal, IntervalChain>,
-
-    /// A map from intervals to transitions which can be taken during those intervals
-    transitions_by_intervals_cache: TransitionsByIntervalsMap,
-
     /// A map from (from_terminal, to_terminal) to cached driving times
     driving_times_cache: DrivingTimesCache,
+
     /// Times during which pickup can occur. Takes into account e.g. terminals
     /// closing overnight
     pickup_times: IntervalsByCargoMap,
@@ -189,116 +233,322 @@ pub struct ScheduleGenerator {
     dropoff_times: IntervalsByCargoMap,
 
     /// A map from cargo to information about delivering it
-    cargo_delivery_info: HashMap<Cargo, CargoDeliveryInformation>,
+    cargo_booking_info: HashMap<Cargo, BookingInformation>,
 
-    trucks: Vec<Truck>,
+    cargo_by_pickup_terminal: HashMap<Terminal, BTreeSet<Cargo>>,
+
+    terminals: BTreeSet<Terminal>,
+
+    trucks: BTreeSet<Truck>,
 
     /// Terminals where the trucks start at
-    truck_terminals: HashMap<Truck, Terminal>,
+    truck_starting_terminals: HashMap<Truck, Terminal>,
 
     /// Time in which we are allowed to schedule trucks
     planning_period: Interval,
 }
 
 impl ScheduleGenerator {
-    /// Returns a vector of transitions which can be done starting at terminal
-    /// `from`, ending at `to`, and driving to transition start terminal, driving
-    /// through the transition, and then driving to `to`. Also uses `planned_cargo`
-    /// to only return cargo that still doesn't have delivery plans
-    fn get_possible_transitions_for_window(
-        &mut self,
-        from: Terminal,
-        to: Terminal,
-        when: &Interval,
-        planned_cargo: &HashSet<Cargo>,
-    ) -> Vec<Transition> {
-        let key = (from, to, when.clone());
-        // Find cached value or recalculate
-        let all_intervals = if let Some(entry) = self.transitions_by_intervals_cache.get(&key) {
-            entry
+    /// Given a truck and a time, returns the constraints on the gap around `time`,
+    /// for example due to the end of the planning time or due to a checkpoint at that time.
+    /// While the previous terminal is always defined, we might have no requirement for terminal
+    /// after `time`, in which case it is None.
+    fn get_gap_constraints(
+        &self,
+        schedule: &Schedule,
+        truck: Truck,
+        time: Time,
+    ) -> (Time, Time, Terminal, Option<Terminal>) {
+        let (prev, next) = schedule.get_surrounding_checkpoints(truck, time);
+
+        let (time_before, terminal_before) = if let Some(prev) = prev {
+            (prev.time, prev.terminal)
         } else {
-            &self.recalculate_possible_transitions_for_window(from, to, when)
+            // Before first interval
+            (
+                self.planning_period.get_start_time(),
+                *self.truck_starting_terminals.get(&truck).unwrap(),
+            )
         };
 
-        // Filter out all cargo that has already been planned
-        all_intervals
-            .iter()
-            .filter(|transition| !planned_cargo.contains(&transition.get_additional_data().cargo))
-            // Copy all this into a Vec
-            .cloned()
-            .collect()
+        let (time_after, terminal_after) = if let Some(next) = next {
+            (next.time, Some(next.terminal))
+        } else {
+            (self.planning_period.get_end_time(), None)
+        };
+
+        (time_before, time_after, terminal_before, terminal_after)
     }
 
-    fn recalculate_possible_transitions_for_window(
+    /// Return (`truck`, index in `checkpoints`) for a random checkpoint
+    fn get_random_checkpoint<'a>(
         &mut self,
-        from: Terminal,
-        to: Terminal,
-        when: &Interval,
-    ) -> Vec<Transition> {
-        let mut out = Vec::new();
+        schedule: &'a Schedule,
+        rng: &mut ThreadRng,
+    ) -> Option<(&'a Checkpoint, Truck, usize)> {
+        // Pick a random checkpoint, uniformly, across trucks
+        // TODO: keep track of this number to make it faster
+        let total_num_checkpoints = schedule
+            .truck_checkpoints
+            .iter()
+            .map(|(_truck, checkpoints)| checkpoints.len())
+            .sum();
 
-        for (cargo, delivery_info) in self.cargo_delivery_info.iter() {
-            // Driving from current terminal to start terminal of cargo
-            let driving_time1 = self
-                .driving_times_cache
-                .get_driving_time(from, delivery_info.from);
-
-            // Driving from terminal where cargo is dropped of to end terminal
-            let driving_time2 = self
-                .driving_times_cache
-                .get_driving_time(delivery_info.to, to);
-
-            let delivery_duration = delivery_info.direct_driving_time;
-
-            // interval in which we can start the new delivery,
-            // allowing for time beforehand to go to `delivery_info`.to
-            // and time to go to `delivery_info`.from
-            let padded_delivery_start_times =
-                when.reschedule(driving_time1, -driving_time2 - delivery_duration);
-
-            // If we have time to do that,
-            if let Some(padded_delivery_start_times) = padded_delivery_start_times {
-                // add the intervals when we have the time
-
-                // Look at the intervals where we both can start the delivery
-                // and have enough time to complete it
-                let allowed_windows = delivery_info.direct_delivery_start_times.intersect(
-                    &IntervalWithDataChain::from_interval(padded_delivery_start_times),
-                );
-
-                // For each of them, add a potential delivery
-                for window in allowed_windows.get_intervals().iter() {
-                    let transition_info = TransitionInfo {
-                        from: delivery_info.from,
-                        to: delivery_info.to,
-                        cargo: *cargo,
-                    };
-                    let start_time = window.get_start_time();
-                    let end_time = window.get_end_time();
-                    // 1. As soon as we are free
-                    out.push(
-                        Transition::new(
-                            start_time,
-                            start_time.checked_add_signed(delivery_duration).unwrap(),
-                            transition_info.clone(),
-                        )
-                        .unwrap(),
-                    );
-
-                    // 2. At the last possible moment
-                    out.push(
-                        Transition::new(
-                            end_time.checked_add_signed(-delivery_duration).unwrap(),
-                            end_time,
-                            transition_info,
-                        )
-                        .unwrap(),
-                    );
-                }
-            }
+        if total_num_checkpoints == 0 {
+            return None;
         }
 
-        out
+        let checkpoint_index = rng.random_range(0..total_num_checkpoints);
+        let mut num_checkpoints_considered = 0;
+        // Find a truck, weighted by number of checkpoints in it
+        let (chosen_truck, chosen_index) = schedule
+            .truck_checkpoints
+            .iter()
+            .find_map(|(truck, checkpoints)| {
+                if checkpoint_index - num_checkpoints_considered < checkpoints.len() {
+                    return Some((truck, checkpoint_index - num_checkpoints_considered));
+                } else {
+                    num_checkpoints_considered += checkpoints.len();
+                    return None;
+                }
+            })
+            .unwrap();
+
+        let checkpoint = schedule
+            .truck_checkpoints
+            .get(&chosen_truck)
+            .unwrap()
+            .get(chosen_index)
+            .unwrap();
+        Some((checkpoint, *chosen_truck, chosen_index))
+    }
+
+    /// Pick a random checkpoint and remove it
+    fn remove_random_checkpoint(
+        &mut self,
+        schedule: &Schedule,
+        rng: &mut ThreadRng,
+    ) -> Option<Schedule> {
+        let (checkpoint, chosen_truck, chosen_index) = self.get_random_checkpoint(schedule, rng)?;
+        // To avoid easily undoing progress, only allow removing checkpoint if there is no cargo
+        // pickup or dropoff in it
+
+        // TODO: maybe it is faster to list all checkpoints without pickups or dropoffs and
+        // then pick randomly among them
+        if !checkpoint.pickup_cargo.is_empty() || !checkpoint.dropoff_cargo.is_empty() {
+            return None;
+        }
+
+        // TODO: make the clones cheaper
+        let mut out = schedule.clone();
+
+        // Remove the cargo
+        out.truck_checkpoints
+            .get_mut(&chosen_truck)
+            .unwrap()
+            .remove(chosen_index);
+
+        return Some(out);
+    }
+
+    fn remove_random_dropoff(
+        &mut self,
+        schedule: &Schedule,
+        rng: &mut ThreadRng,
+    ) -> Option<Schedule> {
+        // Only consider cargo that has been delivered
+        let (cargo, cargo_state) = schedule
+            .scheduled_cargo_state
+            .iter()
+            .filter(|(_, cargo_state)| cargo_state.is_delivered())
+            .choose(rng)?;
+        let mut out = schedule.clone();
+
+        // Remove all references to this cargo in truck
+        let truck = cargo_state.get_truck();
+
+        out.scheduled_cargo_state
+            .insert(*cargo, ScheduledCargoState::PickedUp(truck));
+        out.truck_checkpoints
+            .get_mut(&truck)
+            .unwrap()
+            .iter_mut()
+            .for_each(|checkpoint| {
+                checkpoint.dropoff_cargo.remove(cargo);
+            });
+
+        Some(out)
+    }
+
+    /// Remove pickup for a random cargo, and if it was dropped off,
+    /// also remove the dropoff
+    fn remove_random_pickup_and_potentially_dropoff(
+        &mut self,
+        schedule: &Schedule,
+        rng: &mut ThreadRng,
+    ) -> Option<Schedule> {
+        let (cargo, cargo_state) = schedule.scheduled_cargo_state.iter().choose(rng)?;
+        let mut out = schedule.clone();
+
+        out.scheduled_cargo_state.remove(cargo);
+        // Remove all references to this cargo in truck
+        let truck = cargo_state.get_truck();
+        out.truck_checkpoints
+            .get_mut(&truck)
+            .unwrap()
+            .iter_mut()
+            .for_each(|checkpoint| {
+                checkpoint.pickup_cargo.remove(cargo);
+                checkpoint.dropoff_cargo.remove(cargo);
+            });
+
+        Some(out)
+    }
+
+    /// Add a random cargo pickup to a checkpoint
+    fn add_random_pickup(&mut self, schedule: &Schedule, rng: &mut ThreadRng) -> Option<Schedule> {
+        let (checkpoint, chosen_truck, chosen_index) = self.get_random_checkpoint(schedule, rng)?;
+        // Try to pick up new cargo. Look at cargo that hasn't been picked up yet
+        // and try to pick it up
+        let chosen_cargo = self
+            .cargo_by_pickup_terminal
+            .get(&checkpoint.terminal)
+            .unwrap()
+            .iter()
+            .filter(|cargo| !schedule.scheduled_cargo_state.contains_key(cargo))
+            .choose(rng)?;
+
+        // BUG: Not yet respecting allowed dropoff and pickup times
+        // TODO: instead of simply adding a pickup, move the checkpoint to allow for a new pickup
+        // to happen
+        let mut out = schedule.clone();
+        out.get_checkpoint_mut(chosen_truck, chosen_index)
+            .unwrap()
+            .pickup_cargo
+            .insert(*chosen_cargo);
+        out.scheduled_cargo_state
+            .insert(*chosen_cargo, ScheduledCargoState::PickedUp(chosen_truck));
+
+        return Some(out);
+    }
+
+    /// Add a random cargo dropoff to a checkpoint
+    fn add_random_dropoff(&mut self, schedule: &Schedule, rng: &mut ThreadRng) -> Option<Schedule> {
+        // Find a random cargo that has been picked up, but not dropped off
+        let (chosen_cargo, chosen_cargo_state) = schedule
+            .scheduled_cargo_state
+            .iter()
+            .filter(|(_, state)| state.is_picked_up_not_delivered())
+            .choose(rng)?;
+        let chosen_truck = chosen_cargo_state.get_truck();
+
+        let booking_info = self.cargo_booking_info.get(chosen_cargo).unwrap();
+        let to_terminal = booking_info.to;
+        // BUG: Not yet respecting allowed dropoff and pickup times
+        // TODO: instead of simply adding a dropoff, move the checkpoint to allow for a new dropoff
+        // to happen
+
+        let mut out = schedule.clone();
+
+        // Find first index after this truck picks up the cargo during which we can drop off
+        let dropoff_checkpoint = out
+            .truck_checkpoints
+            .get_mut(&chosen_truck)
+            .unwrap()
+            .iter_mut()
+            .skip_while(|checkpoint| !checkpoint.pickup_cargo.contains(chosen_cargo))
+            .find(|checkpoint| checkpoint.terminal == to_terminal)?;
+
+        dropoff_checkpoint.dropoff_cargo.insert(*chosen_cargo);
+        out.scheduled_cargo_state
+            .insert(*chosen_cargo, ScheduledCargoState::Delivered(chosen_truck));
+
+        // Make sure that the dropoff occurs after pickup
+        let deliveries = out.truck_checkpoints.get(&chosen_truck).unwrap();
+        let pickup_index = deliveries
+            .iter()
+            .position(|checkpoint| checkpoint.pickup_cargo.contains(chosen_cargo));
+        let dropoff_index = deliveries
+            .iter()
+            .position(|checkpoint| checkpoint.dropoff_cargo.contains(chosen_cargo));
+        assert!(pickup_index < dropoff_index);
+
+        return Some(out);
+    }
+
+    /// Try to add a random direct delivery; return new schedule if succeeded
+    fn add_random_checkpoint(
+        &mut self,
+        schedule: &Schedule,
+        rng: &mut ThreadRng,
+    ) -> Option<Schedule> {
+        // TODO: pick so that empty trucks have a higher chance of being picked
+        let truck = *self.trucks.iter().choose(rng)?;
+
+        // We want to pick an interval between checkpoints to which we will add a new checkpoint
+        // Pick a time uniformly at random and pick the interval containing that time,
+        // so that large intervals are more likely to be chosen, breaking up large intervals.
+        let planning_start_time = self.planning_period.get_start_time();
+        let planning_end_time = self.planning_period.get_end_time();
+        let time_to_identify_gap = (planning_start_time..planning_end_time).choose(rng)?;
+        let (start_time, end_time, start_terminal, end_terminal) =
+            self.get_gap_constraints(schedule, truck, time_to_identify_gap);
+
+        // TODO: pick a time and a terminal based on whether we can pick up or drop off cargo at the time
+        // For now, we just picked at random and stick with it
+
+        // disallow picking same terminal as the one before or after, since we want to associate
+        // gaps between checkpoints with driving
+        let new_terminal = *self
+            .terminals
+            .iter()
+            .filter(|terminal| **terminal != start_terminal && Some(**terminal) != end_terminal)
+            .choose(rng)?;
+
+        // Allow for time to go to and from the terminal
+        let driving_time1 = self
+            .driving_times_cache
+            .get_driving_time(start_terminal, new_terminal);
+        // If the end terminal is not enforced, we can just stay where we are
+        let driving_time2 = if let Some(end_terminal) = end_terminal {
+            self.driving_times_cache
+                .get_driving_time(new_terminal, end_terminal)
+        } else {
+            0
+        };
+
+        let earliest_checkpoint_time = start_time.checked_add_signed(driving_time1).unwrap();
+        let latest_checkpoint_time = end_time.checked_add_signed(-driving_time2).unwrap();
+
+        // Otherwise, schedule a checkpoint in this time, if we can
+        let new_time = (earliest_checkpoint_time..latest_checkpoint_time).choose(rng)?;
+
+        let mut out = schedule.clone();
+        let new_deliveries = out.truck_checkpoints.get_mut(&truck).unwrap();
+
+        // Insert in place of first element after it,
+        // or if all elements are before it, insert it at the end
+        let new_checkpoint_index = new_deliveries
+            .iter()
+            .position(|checkpoint| checkpoint.time > new_time)
+            .unwrap_or(new_deliveries.len());
+        new_deliveries.insert(
+            new_checkpoint_index,
+            Checkpoint {
+                time: new_time,
+                terminal: new_terminal,
+                pickup_cargo: BTreeSet::new(),
+                dropoff_cargo: BTreeSet::new(),
+            },
+        );
+
+        // Make sure that the times are still in strictly ascending order of time
+        // https://stackoverflow.com/questions/51272571/how-do-i-check-if-a-slice-is-sorted
+        assert!(new_deliveries
+            .windows(2)
+            .all(|checkpoints| checkpoints[0].time < checkpoints[1].time));
+
+        return Some(out);
     }
 }
 
@@ -323,7 +573,7 @@ impl ScheduleGenerator {
     pub fn new(
         terminal_data: HashMap<Terminal, (Time, Time)>,
         truck_data: HashMap<Truck, Terminal>,
-        transport_data: Vec<TransportRequest>,
+        booking_data: Vec<Booking>,
         planning_period: (Time, Time),
     ) -> PyResult<Self> {
         // Calculate terminal_open_intervals
@@ -332,198 +582,132 @@ impl ScheduleGenerator {
             // If it is a valid interval, create
             let interval = interval_or_error(*opening_time, *closing_time)?;
             // TODO: make opening and closing times repeat day on day
+            // TODO: if you do that, be sure to set the starting point to be sane (and
+            // not e.g. 0 unix time) to avoid considering really old time intervals
             let intervals = IntervalChain::from_interval(interval);
             terminal_open_intervals.insert(*terminal, intervals);
         }
 
-        let mut trucks = Vec::new();
-        let mut truck_terminals = HashMap::new();
+        let mut trucks = BTreeSet::new();
+        let mut truck_starting_terminals = HashMap::new();
 
         for (truck, starting_terminal) in truck_data.into_iter() {
-            trucks.push(truck);
-            truck_terminals.insert(truck, starting_terminal);
+            trucks.insert(truck);
+            truck_starting_terminals.insert(truck, starting_terminal);
         }
 
         // Calculate pickup and dropoff times
         let mut pickup_times = HashMap::new();
         let mut dropoff_times = HashMap::new();
 
-        let mut cargo_delivery_info = HashMap::new();
+        let mut cargo_by_pickup_terminal = HashMap::new();
+
+        let mut cargo_booking_info = HashMap::new();
 
         let mut driving_times_map: DrivingTimesMap = HashMap::new();
 
-        for transport_request in transport_data.iter() {
-            let cargo = transport_request.cargo;
+        for booking in booking_data.iter() {
+            let cargo = booking.cargo;
             // Pickup intervals that don't consider terminal opening times
             let raw_pickup_intervals = IntervalChain::from_interval(interval_or_error(
-                transport_request.pickup_open_time,
-                transport_request.pickup_close_time,
+                booking.pickup_open_time,
+                booking.pickup_close_time,
             )?);
             let raw_dropoff_intervals = IntervalChain::from_interval(interval_or_error(
-                transport_request.dropoff_open_time,
-                transport_request.dropoff_close_time,
+                booking.dropoff_open_time,
+                booking.dropoff_close_time,
             )?);
 
-            let from_terminal_open_intervals = terminal_open_intervals
-                .get(&transport_request.from_terminal)
-                .unwrap();
+            // Record this cargo as picked up at this terminal
+            cargo_by_pickup_terminal
+                .entry(booking.from_terminal)
+                .or_insert(BTreeSet::new())
+                .insert(cargo);
 
-            let to_terminal_open_intervals = terminal_open_intervals
-                .get(&transport_request.to_terminal)
-                .unwrap();
+            let from_terminal_open_intervals =
+                terminal_open_intervals.get(&booking.from_terminal).unwrap();
+
+            let to_terminal_open_intervals =
+                terminal_open_intervals.get(&booking.to_terminal).unwrap();
 
             let pickup_intervals = from_terminal_open_intervals.intersect(&raw_pickup_intervals);
             let dropoff_intervals = to_terminal_open_intervals.intersect(&raw_dropoff_intervals);
-
-            // Calculate direct_delivery_start_times: times when we can
-            // start a delivery on a direct route and complete it successfully
-            // To do that, shift dropoff times by time it takes to drive to get
-            // times when it is possible to leave
-            let driving_time: TimeDelta = transport_request.direct_driving_time;
-            let shifted_dropoff_intervals = IntervalChain::from_intervals(
-                dropoff_intervals
-                    .get_intervals()
-                    .iter()
-                    .map(|interval| interval.reschedule(-driving_time, -driving_time).unwrap())
-                    .collect(),
-            );
-            let direct_delivery_start_times =
-                pickup_intervals.intersect(&shifted_dropoff_intervals);
 
             pickup_times.insert(cargo, pickup_intervals);
             dropoff_times.insert(cargo, dropoff_intervals);
 
             // Record driving times on direct routes
             driving_times_map.insert(
-                (
-                    transport_request.from_terminal,
-                    transport_request.to_terminal,
-                ),
-                transport_request.direct_driving_time,
+                (booking.from_terminal, booking.to_terminal),
+                booking.direct_driving_time,
             );
 
             // Update delivery info
-            let delivery_info = CargoDeliveryInformation {
-                direct_driving_time: transport_request.direct_driving_time,
-                from: transport_request.from_terminal,
-                to: transport_request.to_terminal,
-                direct_delivery_start_times,
+            let delivery_info = BookingInformation {
+                from: booking.from_terminal,
+                to: booking.to_terminal,
             };
-            cargo_delivery_info.insert(cargo, delivery_info);
+            cargo_booking_info.insert(cargo, delivery_info);
         }
 
         Ok(Self {
-            terminal_open_intervals,
-            transitions_by_intervals_cache: HashMap::new(),
             driving_times_cache: DrivingTimesCache::from_map(driving_times_map),
             pickup_times,
             dropoff_times,
-            cargo_delivery_info,
+            cargo_booking_info,
+            cargo_by_pickup_terminal,
+            terminals: terminal_data.keys().cloned().collect(),
             trucks,
-            truck_terminals,
+            truck_starting_terminals,
             planning_period: interval_or_error(planning_period.0, planning_period.1)?,
         })
     }
 
+    /// Creates an empty schedule
     pub fn empty_schedule(&self) -> Schedule {
-        let mut truck_transitions: BTreeMap<Truck, TransitionChain> = BTreeMap::new();
-        for truck in self.trucks.iter() {
-            truck_transitions.insert(*truck, TransitionChain::new());
-        }
-
         Schedule {
-            truck_transitions,
-            planned_cargo: HashSet::new(),
+            // Create empty checkpoints for each truck
+            truck_checkpoints: self.trucks.iter().map(|truck| (*truck, vec![])).collect(),
+            scheduled_cargo_state: BTreeMap::new(),
         }
     }
 
     /// Gets a random neighbour for a schedule.
     /// Note that the neighbours might not be sampled uniformly.
-    /// Try to generate a truck `num_tries` times before
-    /// giving up. This helps protect against e.g. schedules that have no
-    /// neighbours
+    /// Pick an action type and try to execute it randomly up to
+    /// `num_tries_per_action` times. If this fails, pick another action type and repeat.
+    /// This helps to keep frequency of selecting each action type similar to what is expected,
+    /// despite some action types failing more often than others
     pub fn get_schedule_neighbour(
         &mut self,
         schedule: &Schedule,
-        num_tries: usize,
-    ) -> Option<Schedule> {
-        let mut out = schedule.clone();
+        num_tries_per_action: usize,
+    ) -> Schedule {
         let mut rng = rand::rng();
 
-        for _ in 0..num_tries {
-            // Pick a truck at random
-            let truck = self.trucks.choose(&mut rng)?;
+        loop {
+            // Randomly decide what we want to do
+            // Prioritise adding and updating checkpoints because we want to explore more of those
+            // options, and also because adding a checkpoint might fail, but removing is a lot less likely to fail
+            let action_index = rng.random_range(0..6);
 
-            let transitions: &mut TransitionChain = out.truck_transitions.get_mut(truck).unwrap();
-
-            // We require the schedule to be within the planning interval
-            if !transitions.contained_in(&self.planning_period) {
-                return None;
-            }
-
-            // Randomly decide whether we want to add or remove a transition
-            // Prioritise adding transitions because we want to explore more of those
-            // options, and also because adding a transition might fail, but removing is a lot less likely to fail
-            // TODO: count how many relevant values in gaps there are and use that
-            if rng.random_range(0..3) == 0 {
-                // Remove some transition
-                // If empty, fail
-                if transitions.get_intervals().is_empty() {
-                    continue;
-                }
-
-                // Else, remove one of them
-                let index_to_remove = rng.random_range(0..transitions.get_intervals().len());
-                let removed_transition = transitions.remove(index_to_remove);
-                out.planned_cargo
-                    .remove(&removed_transition.get_additional_data().cargo);
-
-                return Some(out);
-            } else {
-                // Add some transaction
-                let gaps = transitions.gaps(&self.planning_period);
-                let gap = gaps.get_intervals().choose(&mut rng);
-
-                // if the gap is empty, fail
-                if let Some(gap) = gap {
-                    let (prev_transition_data, next_transition_data) = gap.get_additional_data();
-                    // Take terminal from previous transition or
-                    // initial terminal if this is the first gap
-                    let from_terminal = if let Some(prev_transition_data) = prev_transition_data {
-                        prev_transition_data.to
-                    } else {
-                        *self.truck_terminals.get(truck).unwrap()
-                    };
-
-                    // Take terminal from next transition or
-                    // initial terminal if this is the last gap
-                    // TODO: allow flexibility for last terminal
-                    let to_terminal = if let Some(next_transition_data) = next_transition_data {
-                        next_transition_data.from
-                    } else {
-                        *self.truck_terminals.get(truck).unwrap()
-                    };
-
-                    let possible_new_transitions = self.get_possible_transitions_for_window(
-                        from_terminal,
-                        to_terminal,
-                        &gap.remove_additional_data(),
-                        &out.planned_cargo,
-                    );
-
-                    // If no transitions here, fail
-                    if let Some(new_transition) = possible_new_transitions.choose(&mut rng) {
-                        // Add the transition
-
-                        assert!(transitions.try_add(new_transition.clone()));
-                        out.planned_cargo
-                            .insert(new_transition.get_additional_data().cargo);
-
-                        return Some(out);
-                    }
+            // Try executing this action type a few times
+            for _ in 0..num_tries_per_action {
+                let new_schedule = match action_index {
+                    0..1 => self.remove_random_checkpoint(schedule, &mut rng),
+                    1..2 => self.add_random_checkpoint(schedule, &mut rng),
+                    2..3 => self.remove_random_dropoff(schedule, &mut rng),
+                    3..4 => self.remove_random_pickup_and_potentially_dropoff(schedule, &mut rng),
+                    4..5 => self.add_random_pickup(schedule, &mut rng),
+                    // Try doing this more often, since it fails more often and we want
+                    // to have dropoffs for pickups
+                    5..6 => self.add_random_dropoff(schedule, &mut rng),
+                    _ => unreachable!(),
+                };
+                if let Some(new_schedule) = new_schedule {
+                    return new_schedule;
                 }
             }
         }
-        None
     }
 }

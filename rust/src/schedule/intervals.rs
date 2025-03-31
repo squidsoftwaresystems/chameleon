@@ -1,8 +1,6 @@
 use std::cmp::max;
 use std::cmp::min;
 
-use pyo3::pyclass;
-
 // TODO: convert these to struct Time(u64) and TimeDelta(i64)
 // to make it more fool-proof
 pub type Time = u64;
@@ -11,7 +9,7 @@ pub type TimeDelta = i64;
 pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
 pub struct IntervalWithData<T>
 where
     T: Eq,
@@ -51,6 +49,10 @@ impl<T: Clone + Eq> IntervalWithData<T> {
         return &self.additional_data;
     }
 
+    pub fn get_additional_data_mut(&mut self) -> &mut T {
+        return &mut self.additional_data;
+    }
+
     /// Try to create a copy of self with offset start and end times.
     /// If the result is invalid (e.g. length is non-positive), return None
     pub fn reschedule(&self, start_change: TimeDelta, end_change: TimeDelta) -> Option<Self> {
@@ -62,12 +64,16 @@ impl<T: Clone + Eq> IntervalWithData<T> {
         )
     }
 
-    pub fn remove_additional_data(&self) -> Interval {
-        Interval {
+    pub fn map_data<U: Eq>(&self, new_data: U) -> IntervalWithData<U> {
+        IntervalWithData {
             start_time: self.start_time,
             end_time: self.end_time,
-            additional_data: (),
+            additional_data: new_data,
         }
+    }
+
+    pub fn remove_additional_data(&self) -> Interval {
+        self.map_data(())
     }
 }
 
@@ -95,6 +101,7 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
     pub fn from_intervals(intervals: Vec<IntervalWithData<T>>) -> Self {
         IntervalWithDataChain { intervals }
     }
+
     /// Create an IntervalChain that is the intersection of two IntervalChains,
     /// that is sub-intervals occurring in both. Keeps additional information of `self`
     pub fn intersect<U: Eq>(&self, other: &IntervalWithDataChain<U>) -> IntervalWithDataChain<T> {
@@ -187,6 +194,10 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
 
     pub fn get_intervals(&self) -> &Vec<IntervalWithData<T>> {
         return &self.intervals;
+    }
+
+    pub fn get_intervals_mut(&mut self) -> &mut Vec<IntervalWithData<T>> {
+        return &mut self.intervals;
     }
 
     /// Remove interval at index `index`, panic if index out of bounds

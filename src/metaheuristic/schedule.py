@@ -3,7 +3,7 @@ from typing import Dict, List, Tuple, cast
 import pandas as pd
 
 import chameleon_rust
-from chameleon_rust import TransportRequest
+from chameleon_rust import Booking
 
 # TODO: collapse 2 consecutive empty transports into 1
 
@@ -71,8 +71,8 @@ def make_schedule_generator(
         for truck, row in truck_data.iterrows()
     }
 
-    _transpost_data: List[TransportRequest] = [
-        TransportRequest(
+    _transpost_data: List[Booking] = [
+        Booking(
             cargo=row["cargo"],
             from_terminal=row["from_terminal"],
             to_terminal=row["to_terminal"],
