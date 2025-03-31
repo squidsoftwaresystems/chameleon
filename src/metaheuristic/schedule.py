@@ -2,24 +2,19 @@ from typing import Dict, List, Tuple, cast
 
 import pandas as pd
 
-import chameleon_rust
-from chameleon_rust import Booking
+from chameleon_rust import Booking, Cargo, ScheduleGenerator, Terminal, Truck
 
 # TODO: collapse 2 consecutive empty transports into 1
 
 Time = int
 TimeDelta = int
 
-Terminal = int
-Cargo = int
-Truck = int
-
 
 def make_schedule_generator(
     terminal_data: pd.DataFrame,
     truck_data: pd.DataFrame,
     requested_transports: pd.DataFrame,
-) -> chameleon_rust.ScheduleGenerator:
+) -> ScheduleGenerator:
     """
     Creates a blank schedule, given dataframes for data
 
@@ -59,7 +54,7 @@ def make_schedule_generator(
 
     # Repack the data into the format used by the bindings
     _terminal_data: Dict[Terminal, Tuple[Time, Time]] = {
-        cast(int, terminal): (
+        Terminal(cast(int, terminal)): (
             timestamp_to_seconds(row["opening_time"]),
             timestamp_to_seconds(row["closing_time"]),
         )
@@ -67,15 +62,15 @@ def make_schedule_generator(
     }
 
     _truck_data: Dict[Truck, Terminal] = {
-        cast(int, truck): row["starting_terminal"]
+        Truck(cast(int, truck)): Terminal(row["starting_terminal"])
         for truck, row in truck_data.iterrows()
     }
 
     _transpost_data: List[Booking] = [
         Booking(
-            cargo=row["cargo"],
-            from_terminal=row["from_terminal"],
-            to_terminal=row["to_terminal"],
+            cargo=Cargo(row["cargo"]),
+            from_terminal=Terminal(row["from_terminal"]),
+            to_terminal=Terminal(row["to_terminal"]),
             pickup_open_time=timestamp_to_seconds(row["pickup_open_time"]),
             pickup_close_time=timestamp_to_seconds(row["pickup_close_time"]),
             dropoff_open_time=timestamp_to_seconds(row["dropoff_open_time"]),
@@ -104,6 +99,6 @@ def make_schedule_generator(
         timestamp_to_seconds(end_time),
     )
 
-    return chameleon_rust.ScheduleGenerator(
+    return ScheduleGenerator(
         _terminal_data, _truck_data, _transpost_data, _planning_period
     )

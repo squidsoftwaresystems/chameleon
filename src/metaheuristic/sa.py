@@ -10,7 +10,7 @@ def sa_solve(
     schedule_generator: ScheduleGenerator,
     initial_temperature: float = 10.0,
     final_temperature: float = 1e-3,
-    alpha: float = 0.99,
+    alpha: float = 0.999,
     max_iterations: int = 10000,
     num_tries_per_action: int = 10,
 ) -> Schedule:
