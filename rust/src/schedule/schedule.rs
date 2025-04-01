@@ -145,20 +145,63 @@ impl Schedule {
             .get_mut(checkpoint_index)
     }
 
-    /// Finds latest checkpoint strictly before `time` for truck
-    /// and earliest checkpoint strictly after `time`
-    fn get_surrounding_checkpoints(
+    /// Given a checkpoint, finds the checkpoints directly before and after it
+    fn get_prev_and_next_checkpoints(
+        &self,
+        truck: Truck,
+        checkpoint: &Checkpoint,
+    ) -> (Option<&Checkpoint>, Option<&Checkpoint>) {
+        let checkpoints = self.truck_checkpoints.get(&truck).unwrap();
+
+        let time = checkpoint.time;
+
+        // NOTE: this inequality is strict since we don't expect
+        // 2 checkpoints to have the same time
+        let prev = checkpoints
+            .iter()
+            .rev()
+            .find(|checkpoint| checkpoint.time < time);
+        let next = checkpoints.iter().find(|checkpoint| checkpoint.time > time);
+
+        if let Some(prev) = prev {
+            assert!(prev.time < time);
+        }
+
+        if let Some(next) = next {
+            assert!(time < next.time);
+        }
+
+        (prev, next)
+    }
+
+    /// Given a time, finds the gap between two neighbouring checkpoints
+    /// containing this time
+    /// In other words, given a time, identify an interval
+    /// [prev_checkpoint, next_checkpoint) of consecutive checkpoints so that the
+    /// time is in [prev_checkpoint.time, next_checkpoint.time). This also
+    /// works for implicit checkpoints, such as the ones representing the start and end of day.
+    fn get_checkpoints_around_gap(
         &self,
         truck: Truck,
         time: Time,
     ) -> (Option<&Checkpoint>, Option<&Checkpoint>) {
         let checkpoints = self.truck_checkpoints.get(&truck).unwrap();
 
+        // NOTE: this inequality is weak so that we capture the half-open
+        // interval [prev_checkpoint.time, next_checkpoint.time)
         let prev = checkpoints
             .iter()
             .rev()
-            .find(|checkpoint| checkpoint.time < time);
+            .find(|checkpoint| checkpoint.time <= time);
         let next = checkpoints.iter().find(|checkpoint| checkpoint.time > time);
+
+        if let Some(prev) = prev {
+            assert!(prev.time <= time);
+        }
+
+        if let Some(next) = next {
+            assert!(time < next.time);
+        }
 
         (prev, next)
     }
@@ -292,10 +335,10 @@ impl ScheduleGenerator {
         }
     }
 
-    /// Given a checkpoint before, checkpoint after and a terminal
-    /// for a new checkpoint between them, output the interval in which
-    /// the new checkpoint can be placed so that we have enough time to
-    /// drive between them.
+    /// Find the interval between `prev_checkpoint.time` and `next_checkpoint.time`
+    /// containing the times during which we can put a checkpoint in `new_terminal`
+    /// and have time to drive from `prev_checkpoint.terminal` to `new_terminal` and
+    /// from `new_terminal` to `next_checkpoint.terminal`
     fn get_driving_time_constraints(
         &mut self,
         truck: Truck,
@@ -303,44 +346,48 @@ impl ScheduleGenerator {
         next_checkpoint: Option<&Checkpoint>,
         new_terminal: Terminal,
     ) -> Option<Interval> {
-        let (time_before, time_after, terminal_before, terminal_after) =
-            self.get_surrounding_terminals_and_times(truck, prev_checkpoint, next_checkpoint);
+        let prev_terminal = prev_checkpoint.map(|checkpoint| checkpoint.terminal);
+        let next_terminal = next_checkpoint.map(|checkpoint| checkpoint.terminal);
 
-        let driving_time1 = self.get_driving_time(Some(terminal_before), Some(new_terminal), truck);
+        // TODO: add proper upper bound on time
+        let prev_time = prev_checkpoint
+            .map(|checkpoint| checkpoint.time)
+            .unwrap_or(self.planning_period.get_start_time());
+        let next_time = next_checkpoint
+            .map(|checkpoint| checkpoint.time)
+            .unwrap_or(self.planning_period.get_end_time());
 
-        let driving_time2 = self.get_driving_time(Some(new_terminal), terminal_after, truck);
+        let driving_time1 = self.get_driving_time(prev_terminal, Some(new_terminal), truck);
+        let driving_time2 = self.get_driving_time(Some(new_terminal), next_terminal, truck);
 
-        let earliest_checkpoint_time = time_before.checked_add_signed(driving_time1).unwrap();
-        let latest_checkpoint_time = time_after.checked_add_signed(-driving_time2).unwrap();
+        let earliest_checkpoint_time = prev_time.checked_add_signed(driving_time1).unwrap();
+        let latest_checkpoint_time = next_time.checked_add_signed(-driving_time2).unwrap();
 
         Interval::new(earliest_checkpoint_time, latest_checkpoint_time, ())
     }
 
     /// Given a previous and next checkpoints, find
-    /// what terminals and times those correspond to. Handles cases when
+    /// what terminals those correspond to. Handles cases when
     /// there is no checkpoint, and suggests correct terminals
-    fn get_surrounding_terminals_and_times(
+    fn get_gap_terminals(
         &self,
         truck: Truck,
         prev_checkpoint: Option<&Checkpoint>,
         next_checkpoint: Option<&Checkpoint>,
-    ) -> (Time, Time, Terminal, Option<Terminal>) {
-        let (prev_time, prev_terminal) = if let Some(prev) = prev_checkpoint {
-            (prev.time, prev.terminal)
+    ) -> (Terminal, Option<Terminal>) {
+        let prev_terminal = if let Some(prev) = prev_checkpoint {
+            prev.terminal
         } else {
             // Before first interval
-            (
-                self.planning_period.get_start_time(),
-                self.truck_starting_data.get(&truck).unwrap().1,
-            )
+            self.truck_starting_data.get(&truck).unwrap().1
         };
 
-        let (next_time, next_terminal) = if let Some(next) = next_checkpoint {
-            (next.time, Some(next.terminal))
+        let next_terminal = if let Some(next) = next_checkpoint {
+            Some(next.terminal)
         } else {
-            (self.planning_period.get_end_time(), None)
+            None
         };
-        (prev_time, next_time, prev_terminal, next_terminal)
+        (prev_terminal, next_terminal)
     }
 
     /// Return (`truck`, index in `checkpoints`) for a random checkpoint
@@ -399,9 +446,9 @@ impl ScheduleGenerator {
         let time_to_identify_gap =
             (planning_start_time..planning_end_time).choose(&mut self.rng)?;
         let (prev_checkpoint, next_checkpoint) =
-            schedule.get_surrounding_checkpoints(truck, time_to_identify_gap);
-        let (_prev_time, _next_time, prev_terminal, next_terminal) =
-            self.get_surrounding_terminals_and_times(truck, prev_checkpoint, next_checkpoint);
+            schedule.get_checkpoints_around_gap(truck, time_to_identify_gap);
+        let (prev_terminal, next_terminal) =
+            self.get_gap_terminals(truck, prev_checkpoint, next_checkpoint);
 
         // TODO: pick a time and a terminal based on whether we can pick up or drop off cargo at the time
         // For now, we just picked at random and stick with it
@@ -481,12 +528,9 @@ impl ScheduleGenerator {
         // Check that removing this checkpoint won't leave us
         // with 2 consecutive checkpoints with the same terminals
         let (prev_checkpoint, next_checkpoint) =
-            schedule.get_surrounding_checkpoints(chosen_truck, checkpoint.time);
-        let (_, _, prev_terminal, next_terminal) = self.get_surrounding_terminals_and_times(
-            chosen_truck,
-            prev_checkpoint,
-            next_checkpoint,
-        );
+            schedule.get_prev_and_next_checkpoints(chosen_truck, checkpoint);
+        let (prev_terminal, next_terminal) =
+            self.get_gap_terminals(chosen_truck, prev_checkpoint, next_checkpoint);
         if Some(prev_terminal) == next_terminal {
             return None;
         }
@@ -503,7 +547,7 @@ impl ScheduleGenerator {
         // We are replacing driving A->B->C with driving A->C
         let mut driving_time = *out.truck_driving_times.get(&chosen_truck).unwrap();
         let (prev_checkpoint, next_checkpoint) =
-            schedule.get_surrounding_checkpoints(chosen_truck, checkpoint.time);
+            schedule.get_prev_and_next_checkpoints(chosen_truck, checkpoint);
         let prev_terminal = prev_checkpoint.map(|c| c.terminal);
         let terminal = Some(checkpoint.terminal);
         let next_terminal = next_checkpoint.map(|c| c.terminal);
@@ -567,7 +611,7 @@ impl ScheduleGenerator {
             .intersect_all();
 
         let (checkpoint_before, checkpoint_after) =
-            schedule.get_surrounding_checkpoints(*truck, old_checkpoint.time);
+            schedule.get_prev_and_next_checkpoints(*truck, old_checkpoint);
 
         let driving_restriction_intervals =
             IntervalWithDataChain::from_interval(self.get_driving_time_constraints(

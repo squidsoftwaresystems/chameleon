@@ -60,17 +60,24 @@ def test_get_neighbours():
         schedule = schedule_generator.get_schedule_neighbour(schedule, 100)
 
 
-def test_simulated_annealing():
+def run_sa_with_seed(seed):
     (terminals, trucks, transports) = create_schedule_data()
     schedule_generator = make_schedule_generator(terminals, trucks, transports)
-    schedule_generator.seed(4)
+    schedule_generator.seed(seed)
 
     schedule = schedule_generator.empty_schedule()
     best_schedule, best_score = sa_solve(
         initial_solution=schedule,
         schedule_generator=schedule_generator,
-        seed=0,
+        seed=seed,
     )
+    print(best_score)
 
     # TODO: think of a way to test that its output has not
     # significantly degraded
+
+
+def test_simulated_annealing():
+    """Tests that simulated annealing works without errors"""
+    for i in range(20):
+        run_sa_with_seed(i)

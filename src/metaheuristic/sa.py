@@ -15,7 +15,13 @@ def __deltas_to_probability(deltas: npt.NDArray, temperature: float) -> float:
 
     # We are mainly optimising for delivered cargo,
     # so encourage the switch
-    combined_delta = 3 * deliveries_delta + 0.05 * free_trucks_delta
+    combined_delta = 3 * deliveries_delta
+
+    # Only include free_trucks_delta if we aren't doing worse
+    # for deliveries - we don't want to encourage less deliveries with
+    # more free trucks
+    if deliveries_delta >= 0:
+        combined_delta += 0.05 * free_trucks_delta
 
     # Minimising truck time is secondary to maximising number of deliveries
     if deliveries_delta <= 0:
@@ -48,7 +54,7 @@ def sa_solve(
     initial_solution: Schedule,
     schedule_generator: ScheduleGenerator,
     initial_temperature: float = 10.0,
-    final_temperature: float = 1e-3,
+    final_temperature: float = 1e-1,
     num_iterations: int = 10000,
     num_tries_per_action: int = 10,
     restart_probability=0.001,
@@ -80,12 +86,6 @@ def sa_solve(
     temperature = initial_temperature
 
     iteration = 0
-
-    # Calculate alpha, the cooling rate, so that after `num_iterations` iterations,
-    # the temperature becomes `final_temperature`
-    alpha = exp(
-        (log(final_temperature) - log(initial_temperature)) / num_iterations
-    )
 
     while temperature > final_temperature and iteration < num_iterations:
         # Allow randomly restarting to best known state
@@ -122,7 +122,15 @@ def sa_solve(
             best_scores = current_scores
 
         # 'cool down'
-        temperature *= alpha
+        # We make temperature change at an exponential rate
+        # between initial_temperature and final_temperature
+        # We do this by linearly interpolating between log of both,
+        # and then taking exp.
         iteration += 1
+        progress = float(iteration) / float(num_iterations)
+        temperature = exp(
+            progress * log(final_temperature)
+            + (1 - progress) * log(initial_temperature)
+        )
 
     return best_solution, best_scores
