@@ -7,7 +7,11 @@ edition = "2021"
 [lib]
 name = "chameleon_rust"
 crate-type = ["cdylib"]
+# rustflags = [
+#   "-C", "link-args=-Wl,--no-gc-sections",
+# ]
 
 [dependencies]
 pyo3 = "0.24.0"
 rand = "0.9.0"
+rand_xoshiro = "0.7.0"

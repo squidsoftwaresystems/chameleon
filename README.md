@@ -16,6 +16,7 @@ First, activate the venv: `.venv\Scripts\activate` on Windows, `source .venv/bin
 Then you can:
 - Run unit tests in `test/` folder using `pytest`
 - Rebuild the rust packages for development using `maturin develop` or for release using `maturin develop -r`.
+- For proper GDB support, instead run `RUSTFLAGS="-C link-args=-Wl,--no-gc-sections" maturin develop`
 - Compare performance of algorithms on data by running `evaluation/compare_performance.py`
 - Run algorithms by themselves by running other scripts in subfolders of `evaluation/`
 

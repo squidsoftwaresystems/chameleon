@@ -1,8 +1,8 @@
 use std::cmp::max;
 use std::cmp::min;
 
-use rand::rngs::ThreadRng;
 use rand::seq::IteratorRandom;
+use rand_xoshiro::Xoshiro256PlusPlus;
 
 // TODO: convert these to struct Time(u64) and TimeDelta(i64)
 // to make it more fool-proof
@@ -56,7 +56,7 @@ impl<T: Clone + Eq> IntervalWithData<T> {
         &mut self.additional_data
     }
 
-    pub fn random_time(&self, rng: &mut ThreadRng) -> Time {
+    pub fn random_time(&self, rng: &mut Xoshiro256PlusPlus) -> Time {
         // the interval can't be empty
         (self.start_time..self.end_time).choose(rng).unwrap()
     }

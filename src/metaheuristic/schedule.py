@@ -1,8 +1,17 @@
-from typing import Dict, List, Tuple, cast
+from typing import Callable, Dict, List, Tuple, cast
 
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
-from chameleon_rust import Booking, Cargo, ScheduleGenerator, Terminal, Truck
+from chameleon_rust import (
+    Booking,
+    Cargo,
+    Schedule,
+    ScheduleGenerator,
+    Terminal,
+    Truck,
+)
 
 # TODO: collapse 2 consecutive empty transports into 1
 
@@ -102,3 +111,12 @@ def make_schedule_generator(
     return ScheduleGenerator(
         _terminal_data, _truck_data, _transpost_data, _planning_period
     )
+
+
+def get_scores_calculator(
+    schedule_generator: ScheduleGenerator,
+) -> Callable[[Schedule], npt.NDArray]:
+    def scores_calculator(schedule: Schedule) -> npt.NDArray:
+        return np.array(schedule_generator.scores(schedule))
+
+    return scores_calculator

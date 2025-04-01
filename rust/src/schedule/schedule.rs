@@ -1,11 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    cmp::max,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 use pyo3::{exceptions::PyTypeError, pyclass, pymethods, FromPyObject, PyResult};
-use rand::{rngs::ThreadRng, seq::IteratorRandom, Rng};
+use rand::{seq::IteratorRandom, Rng, SeedableRng};
+use rand_xoshiro::Xoshiro256PlusPlus;
 
 use super::intervals::*;
 
-//NOTE: this prevents recognising them as the same type, and e.g.
+// NOTE: this prevents recognising them as the same type, and e.g.
 // assigning a truck to a cargo by mistake
 #[pyclass]
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
@@ -115,11 +119,19 @@ struct Checkpoint {
 #[pyclass]
 #[derive(Clone)]
 pub struct Schedule {
+    /// The list of checkpoints for each truck.
+    /// An invariant we are maintaining is that the times of checkpoints
+    /// in each Vec are in a strictly ascending order and no two consecutive
+    /// checkpoints have the same terminal. This includes the implicit
+    /// first checkpoint representing the first terminal
     truck_checkpoints: BTreeMap<Truck, Vec<Checkpoint>>,
 
     #[pyo3(get, set)]
     /// Map from cargo that was scheduled to truck taking it
     scheduled_cargo_truck: BTreeMap<Cargo, Truck>,
+
+    /// Total length of time this truck is driving under this schedule
+    truck_driving_times: BTreeMap<Truck, TimeDelta>,
 }
 
 impl Schedule {
@@ -173,14 +185,6 @@ impl Schedule {
             out.push_str("\n\n");
         }
         out
-    }
-
-    /// Returns a score representing how good the Schedule is
-    pub fn score(&self) -> f64 {
-        // Get the number of deliveries
-        let num_deliveries: usize = self.scheduled_cargo_truck.len();
-
-        num_deliveries as f64
     }
 }
 
@@ -245,9 +249,49 @@ pub struct ScheduleGenerator {
 
     /// Time in which we are allowed to schedule trucks
     planning_period: Interval,
+
+    rng: Xoshiro256PlusPlus,
 }
 
 impl ScheduleGenerator {
+    fn assert_truck_checkpoints_invariant(&self, schedule: &Schedule, truck: Truck) {
+        let checkpoints = schedule.truck_checkpoints.get(&truck).unwrap();
+        // Make sure that we don't have 2 checkpoints in the same terminal
+        // together
+        assert!(checkpoints
+            .windows(2)
+            .all(|checkpoints| checkpoints[0].terminal != checkpoints[1].terminal));
+
+        // Also check the starting terminal
+        if let Some(first_checkpoint) = checkpoints.first() {
+            assert!(first_checkpoint.terminal != self.truck_starting_data.get(&truck).unwrap().1);
+        }
+
+        // Make sure that the times are still in strictly ascending order of time
+        // https://stackoverflow.com/questions/51272571/how-do-i-check-if-a-slice-is-sorted
+        assert!(checkpoints
+            .windows(2)
+            .all(|checkpoints| checkpoints[0].time < checkpoints[1].time));
+    }
+
+    /// Get driving time between `from` and `to`.
+    /// If `from` is None, assume it is the starting terminal
+    /// If `to` is None, assume that there is no restriction
+    /// on what `to` is, and so we can stay at `from` for 0 driving time
+    fn get_driving_time(
+        &mut self,
+        from: Option<Terminal>,
+        to: Option<Terminal>,
+        truck: Truck,
+    ) -> TimeDelta {
+        let from = from.unwrap_or_else(|| self.truck_starting_data.get(&truck).unwrap().1);
+        if let Some(to) = to {
+            self.driving_times_cache.get_driving_time(from, to)
+        } else {
+            0
+        }
+    }
+
     /// Given a checkpoint before, checkpoint after and a terminal
     /// for a new checkpoint between them, output the interval in which
     /// the new checkpoint can be placed so that we have enough time to
@@ -262,17 +306,9 @@ impl ScheduleGenerator {
         let (time_before, time_after, terminal_before, terminal_after) =
             self.get_surrounding_terminals_and_times(truck, prev_checkpoint, next_checkpoint);
 
-        let driving_time1 = self
-            .driving_times_cache
-            .get_driving_time(terminal_before, new_terminal);
+        let driving_time1 = self.get_driving_time(Some(terminal_before), Some(new_terminal), truck);
 
-        // If the end terminal is not enforced, we can just stay where we are
-        let driving_time2 = if let Some(end_terminal) = terminal_after {
-            self.driving_times_cache
-                .get_driving_time(new_terminal, end_terminal)
-        } else {
-            0
-        };
+        let driving_time2 = self.get_driving_time(Some(new_terminal), terminal_after, truck);
 
         let earliest_checkpoint_time = time_before.checked_add_signed(driving_time1).unwrap();
         let latest_checkpoint_time = time_after.checked_add_signed(-driving_time2).unwrap();
@@ -311,8 +347,8 @@ impl ScheduleGenerator {
     fn get_random_checkpoint<'a>(
         &mut self,
         schedule: &'a Schedule,
-        rng: &mut ThreadRng,
     ) -> Option<(&'a Checkpoint, Truck, usize)> {
+        let rng = &mut self.rng;
         // Pick a random checkpoint, uniformly, across trucks
         // TODO: keep track of this number to make it faster
         let total_num_checkpoints = schedule
@@ -351,23 +387,20 @@ impl ScheduleGenerator {
     }
 
     /// Try to add a random direct delivery; return new schedule if succeeded
-    fn add_random_checkpoint(
-        &mut self,
-        schedule: &Schedule,
-        rng: &mut ThreadRng,
-    ) -> Option<Schedule> {
+    fn add_random_checkpoint(&mut self, schedule: &Schedule) -> Option<Schedule> {
         // TODO: pick so that empty trucks have a higher chance of being picked
-        let truck = *self.trucks.iter().choose(rng)?;
+        let truck = *self.trucks.iter().choose(&mut self.rng)?;
 
         // We want to pick an interval between checkpoints to which we will add a new checkpoint
         // Pick a time uniformly at random and pick the interval containing that time,
         // so that large intervals are more likely to be chosen, breaking up large intervals.
         let planning_start_time = self.planning_period.get_start_time();
         let planning_end_time = self.planning_period.get_end_time();
-        let time_to_identify_gap = (planning_start_time..planning_end_time).choose(rng)?;
+        let time_to_identify_gap =
+            (planning_start_time..planning_end_time).choose(&mut self.rng)?;
         let (prev_checkpoint, next_checkpoint) =
             schedule.get_surrounding_checkpoints(truck, time_to_identify_gap);
-        let (_, _, start_terminal, end_terminal) =
+        let (_prev_time, _next_time, prev_terminal, next_terminal) =
             self.get_surrounding_terminals_and_times(truck, prev_checkpoint, next_checkpoint);
 
         // TODO: pick a time and a terminal based on whether we can pick up or drop off cargo at the time
@@ -378,8 +411,8 @@ impl ScheduleGenerator {
         let new_terminal = *self
             .terminals
             .iter()
-            .filter(|terminal| **terminal != start_terminal && Some(**terminal) != end_terminal)
-            .choose(rng)?;
+            .filter(|terminal| **terminal != prev_terminal && Some(**terminal) != next_terminal)
+            .choose(&mut self.rng)?;
 
         let allowed_time_interval = self.get_driving_time_constraints(
             truck,
@@ -389,7 +422,7 @@ impl ScheduleGenerator {
         )?;
 
         // Otherwise, schedule a checkpoint in this time, if we can
-        let new_time = allowed_time_interval.random_time(rng);
+        let new_time = allowed_time_interval.random_time(&mut self.rng);
 
         let mut out = schedule.clone();
         let new_deliveries = out.truck_checkpoints.get_mut(&truck).unwrap();
@@ -410,22 +443,29 @@ impl ScheduleGenerator {
             },
         );
 
-        // Make sure that the times are still in strictly ascending order of time
-        // https://stackoverflow.com/questions/51272571/how-do-i-check-if-a-slice-is-sorted
-        assert!(new_deliveries
-            .windows(2)
-            .all(|checkpoints| checkpoints[0].time < checkpoints[1].time));
+        self.assert_truck_checkpoints_invariant(&out, truck);
+
+        // Increase the cached driving time
+        // We are replacing driving A->C with driving A->B->C
+        let mut driving_time = *out.truck_driving_times.get(&truck).unwrap();
+        let prev_terminal = Some(prev_terminal);
+        let terminal = Some(new_terminal);
+
+        let time_a_to_c = self.get_driving_time(prev_terminal, next_terminal, truck);
+        let time_a_to_b = self.get_driving_time(prev_terminal, terminal, truck);
+        let time_b_to_c = self.get_driving_time(terminal, next_terminal, truck);
+
+        driving_time -= time_a_to_c;
+        driving_time += time_a_to_b + time_b_to_c;
+        assert!(driving_time >= 0);
+        out.truck_driving_times.insert(truck, driving_time);
 
         return Some(out);
     }
 
     /// Pick a random checkpoint and remove it
-    fn remove_random_checkpoint(
-        &mut self,
-        schedule: &Schedule,
-        rng: &mut ThreadRng,
-    ) -> Option<Schedule> {
-        let (checkpoint, chosen_truck, chosen_index) = self.get_random_checkpoint(schedule, rng)?;
+    fn remove_random_checkpoint(&mut self, schedule: &Schedule) -> Option<Schedule> {
+        let (checkpoint, chosen_truck, chosen_index) = self.get_random_checkpoint(schedule)?;
         // To avoid easily undoing progress, only allow removing checkpoint if there is no cargo
         // pickup or dropoff in it
 
@@ -438,50 +478,51 @@ impl ScheduleGenerator {
         // TODO: make the clones cheaper
         let mut out = schedule.clone();
 
-        // Remove the cargo
+        // Check that removing this checkpoint won't leave us
+        // with 2 consecutive checkpoints with the same terminals
+        let (prev_checkpoint, next_checkpoint) =
+            schedule.get_surrounding_checkpoints(chosen_truck, checkpoint.time);
+        let (_, _, prev_terminal, next_terminal) = self.get_surrounding_terminals_and_times(
+            chosen_truck,
+            prev_checkpoint,
+            next_checkpoint,
+        );
+        if Some(prev_terminal) == next_terminal {
+            return None;
+        }
+
+        // Remove the checkpoint
         out.truck_checkpoints
             .get_mut(&chosen_truck)
             .unwrap()
             .remove(chosen_index);
 
+        self.assert_truck_checkpoints_invariant(&out, chosen_truck);
+
+        // Reduce the cached driving time
+        // We are replacing driving A->B->C with driving A->C
+        let mut driving_time = *out.truck_driving_times.get(&chosen_truck).unwrap();
+        let (prev_checkpoint, next_checkpoint) =
+            schedule.get_surrounding_checkpoints(chosen_truck, checkpoint.time);
+        let prev_terminal = prev_checkpoint.map(|c| c.terminal);
+        let terminal = Some(checkpoint.terminal);
+        let next_terminal = next_checkpoint.map(|c| c.terminal);
+
+        let time_a_to_c = self.get_driving_time(prev_terminal, next_terminal, chosen_truck);
+        let time_a_to_b = self.get_driving_time(prev_terminal, terminal, chosen_truck);
+        let time_b_to_c = self.get_driving_time(terminal, next_terminal, chosen_truck);
+
+        driving_time += time_a_to_c;
+        driving_time -= time_a_to_b + time_b_to_c;
+        assert!(driving_time >= 0);
+        out.truck_driving_times.insert(chosen_truck, driving_time);
+
         return Some(out);
     }
 
-    // fn remove_random_dropoff(
-    //     &mut self,
-    //     schedule: &Schedule,
-    //     rng: &mut ThreadRng,
-    // ) -> Option<Schedule> {
-    //     // Only consider cargo that has been delivered
-    //     let (cargo, cargo_state) = schedule
-    //         .scheduled_cargo_state
-    //         .iter()
-    //         .filter(|(_, cargo_state)| cargo_state.is_delivered())
-    //         .choose(rng)?;
-    //     let mut out = schedule.clone();
-    //
-    //     // Remove all references to this cargo in truck
-    //     let truck = cargo_state.get_truck();
-    //
-    //     out.scheduled_cargo_state
-    //         .insert(*cargo, ScheduledCargoState::PickedUp(truck));
-    //     out.truck_checkpoints
-    //         .get_mut(&truck)
-    //         .unwrap()
-    //         .iter_mut()
-    //         .for_each(|checkpoint| {
-    //             checkpoint.dropoff_cargo.remove(cargo);
-    //         });
-    //
-    //     Some(out)
-    // }
-
     /// Remove pickup and dropoff for a piece of cargo
-    fn remove_random_delivery(
-        &mut self,
-        schedule: &Schedule,
-        rng: &mut ThreadRng,
-    ) -> Option<Schedule> {
+    fn remove_random_delivery(&mut self, schedule: &Schedule) -> Option<Schedule> {
+        let rng = &mut self.rng;
         let (cargo, truck) = schedule.scheduled_cargo_truck.iter().choose(rng)?;
         let mut out = schedule.clone();
 
@@ -509,7 +550,6 @@ impl ScheduleGenerator {
         old_checkpoint_index: usize,
         new_pickup: &BTreeSet<Cargo>,
         new_dropoff: &BTreeSet<Cargo>,
-        rng: &mut ThreadRng,
     ) -> Option<Time> {
         let old_checkpoint = schedule
             .truck_checkpoints
@@ -545,8 +585,12 @@ impl ScheduleGenerator {
         .iter()
         .intersect_all();
 
-        let new_interval = allowed_intervals.get_intervals().iter().choose(rng)?;
-        let new_time = (new_interval.get_start_time()..new_interval.get_end_time()).choose(rng)?;
+        let new_interval = allowed_intervals
+            .get_intervals()
+            .iter()
+            .choose(&mut self.rng)?;
+        let new_time =
+            (new_interval.get_start_time()..new_interval.get_end_time()).choose(&mut self.rng)?;
 
         // TODO: implement this instead
         // // Pick a time in the allowed intervals uniformly,
@@ -565,11 +609,8 @@ impl ScheduleGenerator {
 
     /// Add a random cargo pickup-dropoff pair to two checkpoints.
     /// If necessary, move checkpoints to allow this to be done
-    fn add_random_delivery(
-        &mut self,
-        schedule: &Schedule,
-        rng: &mut ThreadRng,
-    ) -> Option<Schedule> {
+    fn add_random_delivery(&mut self, schedule: &Schedule) -> Option<Schedule> {
+        let rng = &mut self.rng;
         // Pick a random truck, see what cargo it can deliver based on what terminals
         // it is visiting
         let (truck, checkpoints) = schedule.truck_checkpoints.iter().choose(rng)?;
@@ -653,7 +694,6 @@ impl ScheduleGenerator {
             start_checkpoint_index,
             &new_start_checkpoint_pickup,
             &start_checkpoint.dropoff_cargo,
-            rng,
         )?;
         let new_start_checkpoint = out
             .get_checkpoint_mut(truck, start_checkpoint_index)
@@ -667,7 +707,6 @@ impl ScheduleGenerator {
             end_checkpoint_index,
             &end_checkpoint.pickup_cargo,
             &new_end_checkpoint_dropoff,
-            rng,
         )?;
         let new_end_checkpoint = out.get_checkpoint_mut(truck, end_checkpoint_index).unwrap();
         new_end_checkpoint.dropoff_cargo.insert(chosen_cargo);
@@ -686,50 +725,6 @@ impl ScheduleGenerator {
 
         return Some(out);
     }
-    //
-    // /// Add a random cargo dropoff to a checkpoint
-    // fn add_random_dropoff(&mut self, schedule: &Schedule, rng: &mut ThreadRng) -> Option<Schedule> {
-    //     // Find a random cargo that has been picked up, but not dropped off
-    //     let (chosen_cargo, chosen_cargo_state) = schedule
-    //         .scheduled_cargo_state
-    //         .iter()
-    //         .filter(|(_, state)| state.is_picked_up_not_delivered())
-    //         .choose(rng)?;
-    //     let chosen_truck = chosen_cargo_state.get_truck();
-    //
-    //     let booking_info = self.cargo_booking_info.get(chosen_cargo).unwrap();
-    //     let to_terminal = booking_info.to;
-    //     // BUG: Not yet respecting allowed dropoff and pickup times
-    //     // TODO: instead of simply adding a dropoff, move the checkpoint to allow for a new dropoff
-    //     // to happen
-    //
-    //     let mut out = schedule.clone();
-    //
-    //     // Find first index after this truck picks up the cargo during which we can drop off
-    //     let dropoff_checkpoint = out
-    //         .truck_checkpoints
-    //         .get_mut(&chosen_truck)
-    //         .unwrap()
-    //         .iter_mut()
-    //         .skip_while(|checkpoint| !checkpoint.pickup_cargo.contains(chosen_cargo))
-    //         .find(|checkpoint| checkpoint.terminal == to_terminal)?;
-    //
-    //     dropoff_checkpoint.dropoff_cargo.insert(*chosen_cargo);
-    //     out.scheduled_cargo_state
-    //         .insert(*chosen_cargo, ScheduledCargoState::Delivered(chosen_truck));
-    //
-    //     // Make sure that the dropoff occurs after pickup
-    //     let deliveries = out.truck_checkpoints.get(&chosen_truck).unwrap();
-    //     let pickup_index = deliveries
-    //         .iter()
-    //         .position(|checkpoint| checkpoint.pickup_cargo.contains(chosen_cargo));
-    //     let dropoff_index = deliveries
-    //         .iter()
-    //         .position(|checkpoint| checkpoint.dropoff_cargo.contains(chosen_cargo));
-    //     assert!(pickup_index < dropoff_index);
-    //
-    //     return Some(out);
-    // }
 }
 
 /// Creates an interval [start_time, end_time] and returns an error
@@ -823,12 +818,6 @@ impl ScheduleGenerator {
                 (booking.from_terminal, booking.to_terminal),
                 booking.direct_driving_time,
             );
-            // TODO: might need to remove this assumption that time from
-            // `from` to `to` is the same as from `to` to `from`
-            driving_times_map.insert(
-                (booking.to_terminal, booking.from_terminal),
-                booking.direct_driving_time,
-            );
 
             // Update delivery info
             let booking_info = BookingInformation {
@@ -852,6 +841,7 @@ impl ScheduleGenerator {
             trucks,
             truck_starting_data,
             planning_period: interval_or_error(planning_period.0, planning_period.1)?,
+            rng: Xoshiro256PlusPlus::seed_from_u64(0),
         })
     }
 
@@ -861,7 +851,14 @@ impl ScheduleGenerator {
             // Create empty checkpoints for each truck
             truck_checkpoints: self.trucks.iter().map(|truck| (*truck, vec![])).collect(),
             scheduled_cargo_truck: BTreeMap::new(),
+            // Each truck drives 0 distance by default, simply staying where it is
+            truck_driving_times: self.trucks.iter().map(|truck| (*truck, 0)).collect(),
         }
+    }
+
+    /// Reseeds internal RNG
+    pub fn seed(&mut self, seed: u64) {
+        self.rng = Xoshiro256PlusPlus::seed_from_u64(seed);
     }
 
     /// Gets a random neighbour for a schedule.
@@ -875,21 +872,19 @@ impl ScheduleGenerator {
         schedule: &Schedule,
         num_tries_per_action: usize,
     ) -> Schedule {
-        let mut rng = rand::rng();
-
         loop {
             // Randomly decide what we want to do
             // Prioritise adding and updating checkpoints because we want to explore more of those
             // options, and also because adding a checkpoint might fail, but removing is a lot less likely to fail
-            let action_index = rng.random_range(0..4);
+            let action_index = self.rng.random_range(0..4);
 
             // Try executing this action type a few times
             for _ in 0..num_tries_per_action {
                 let new_schedule = match action_index {
-                    0..1 => self.remove_random_checkpoint(schedule, &mut rng),
-                    1..2 => self.add_random_checkpoint(schedule, &mut rng),
-                    2..3 => self.remove_random_delivery(schedule, &mut rng),
-                    3..4 => self.add_random_delivery(schedule, &mut rng),
+                    0..1 => self.remove_random_checkpoint(schedule),
+                    1..2 => self.add_random_checkpoint(schedule),
+                    2..3 => self.remove_random_delivery(schedule),
+                    3..4 => self.add_random_delivery(schedule),
                     _ => unreachable!(),
                 };
                 if let Some(new_schedule) = new_schedule {
@@ -897,5 +892,53 @@ impl ScheduleGenerator {
                 }
             }
         }
+    }
+
+    /// Returns a score representing how good the Schedule is
+    /// The score is a vector of numbers in interval [0, 1] and each
+    /// represent a different criterion by which the solution can be judged.
+    /// Higher score is better
+    pub fn scores(&mut self, schedule: &Schedule) -> Vec<f64> {
+        // Maximise the number of deliveries
+        let num_deliveries: usize = schedule.scheduled_cargo_truck.len();
+        // Minimise the number of trucks required
+        let num_free_trucks: usize = schedule
+            .truck_checkpoints
+            .values()
+            .filter(|checkpoints| checkpoints.is_empty())
+            .count();
+
+        // Sum of minimal driving times needed to deliver each piece of cargo that
+        // has been delivered;
+        // this is a very simplistic lower bound
+        let min_driving_time: TimeDelta = schedule
+            .scheduled_cargo_truck
+            .keys()
+            .map(|cargo| {
+                let booking_info = self.cargo_booking_info.get(cargo).unwrap();
+                self.driving_times_cache
+                    .get_driving_time(booking_info.from, booking_info.to)
+            })
+            .sum();
+
+        // Total driving time
+        let total_driving_time: TimeDelta = schedule.truck_driving_times.values().copied().sum();
+
+        // Proportion of deliveries made
+        let deliveries_proportion =
+            (num_deliveries as f64) / (self.cargo_booking_info.len() as f64);
+
+        // Proportion of trucks that are free
+        let free_trucks_proportion = (num_free_trucks as f64) / (self.trucks.len() as f64);
+
+        // The smaller the total driving time, the closer this is to 1
+        // Prevent division by 0
+        let driving_time_score = (min_driving_time as f64) / (max(total_driving_time, 1) as f64);
+
+        vec![
+            deliveries_proportion,
+            free_trucks_proportion,
+            driving_time_score,
+        ]
     }
 }

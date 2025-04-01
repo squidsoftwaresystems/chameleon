@@ -1,4 +1,3 @@
-import random
 from typing import List
 
 import pandas as pd
@@ -53,7 +52,6 @@ def test_get_neighbours():
     (terminals, trucks, transports) = create_schedule_data()
     schedule_generator = make_schedule_generator(terminals, trucks, transports)
     schedule = schedule_generator.empty_schedule()
-    random.seed(0)
 
     # I don't know how to test this without inspecting it by hand,
     # or testing that the schedule is valid.
@@ -65,12 +63,13 @@ def test_get_neighbours():
 def test_simulated_annealing():
     (terminals, trucks, transports) = create_schedule_data()
     schedule_generator = make_schedule_generator(terminals, trucks, transports)
-    schedule = schedule_generator.empty_schedule()
-    random.seed(0)
+    schedule_generator.seed(4)
 
+    schedule = schedule_generator.empty_schedule()
     best_schedule, best_score = sa_solve(
         initial_solution=schedule,
         schedule_generator=schedule_generator,
+        seed=0,
     )
 
     # TODO: think of a way to test that its output has not
