@@ -14,7 +14,7 @@ class SquidAPI:
     Handles data fetching, caching, and provides access methods for logistics entities.
     """
 
-    def __init__(self, day: Optional[str] = None):
+    def __init__(self, day: Optional[date] = None):
         # Initialize API credentials and endpoints
         self.__API_KEY = os.getenv("API-KEY")
         if self.__API_KEY is None:
