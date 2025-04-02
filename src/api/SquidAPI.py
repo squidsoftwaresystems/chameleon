@@ -691,32 +691,28 @@ class SquidAPI:
     def getBookingsByCargoWindow(self, start: datetime, end: datetime) -> pd.DataFrame:
         """Find bookings with cargo windows within the specified time range"""
         return self.bookings[
-            (self.bookings.notna(start) and self.bookings.notna(end))
-            & (self.bookings.cargo_opening >= start)
+            (self.bookings.cargo_opening >= start)
             & (self.bookings.cargo_closing <= end)
         ]
 
     def getBookingsByPickupWindow(self, start: datetime, end: datetime) -> pd.DataFrame:
         """Find bookings with pickup windows within the specified time range"""
         return self.bookings[
-            (self.bookings.notna(start) and self.bookings.notna(end))
-            & (self.bookings.pickup_opening >= start)
+            (self.bookings.pickup_opening >= start)
             & (self.bookings.pickup_closing <= end)
         ]
 
     def getBookingsByCargoDay(self, day: date) -> pd.DataFrame:
         """Find bookings with cargo operations scheduled on a specific day"""
         return self.bookings[
-            (self.bookings.notna(day))
-            & (self.bookings.cargo_opening.dt.date == day)
+            (self.bookings.cargo_opening.dt.date == day)
             & (self.bookings.cargo_closing.dt.date == day)
         ]
 
     def getBookingsByPickupDay(self, day: datetime) -> pd.DataFrame:
         """Find bookings with pickups scheduled on a specific day"""
         return self.bookings[
-            (self.bookings.notna(day))
-            & (self.bookings.pickup_opening.dt.date == day)
+            (self.bookings.pickup_opening.dt.date == day)
             & (self.bookings.pickup_closing.dt.date == day)
         ]
 
@@ -750,8 +746,7 @@ class SquidAPI:
             pd.merge(
                 # Filter to only include port transports with a planner_id
                 self.transports[
-                    self.transports.planner_id.notna()
-                    and self.transports.area == "port"
+                    self.transports.planner_id.notna() & self.transports.area == "port"
                 ].loc[:, ["planner_id", "booking_id"]],
                 # Extract relevant columns from bookings
                 self.bookings.loc[
