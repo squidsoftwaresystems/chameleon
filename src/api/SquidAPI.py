@@ -145,6 +145,7 @@ class SquidAPI:
                 inplace=True,
             )
             self.trucks["number"] = self.trucks["number"].astype(int)
+            self.trucks["capacity"] = self.trucks["loading_capacity"] - 5000
             self.trucks.to_csv(self.__TRUCKPATH)
 
     def __fetchTruckStarts(self):
