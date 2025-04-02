@@ -789,7 +789,7 @@ class SquidAPI:
 
     def getCodeDist(
         self, codes: List[str]
-    ) -> Optional[List[Union[float, List[float]]]]:
+    ) -> Optional[Dict[str, Union[float, List[Dict[str, float]]]]]:
         """
         Get the distance between locations using their codes
         """
