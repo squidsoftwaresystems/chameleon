@@ -143,13 +143,19 @@ class SquidAPI:
             self.trucks.to_csv(self.__TRUCKPATH)
 
     def __fetchTruckStarts(self):
-        """Load cached truck start locations and times"""
+        """
+        Load cached truck start locations and times.
+        Note that this data is not available via the API,
+        so it has to be provided manually.
+        """
 
         # Assume the data does not need to be fetched, it is already saved.
         if os.path.exists(self.__TRUCKSTARTSPATH):
             self.truck_starts = pd.read_csv(self.__TRUCKSTARTSPATH)
             self.truck_starts.set_index("id", inplace=True)
         else:
+            # Temporary method to provide an initial setup. This data is not
+            # accessible via the API, so has to be provided manually.
             raise ValueError(
                 "Truck starts data not found. Please fetch the data first."
             )
@@ -285,6 +291,8 @@ class SquidAPI:
             return
 
         # Fetch the data from the API
+        # If day is set, will only fetch bookings which have a
+        # first pickup on or after that date
         if day:
             # Convert date to string format for API query
             query_date = day.strftime("%Y-%m-%d")
@@ -304,23 +312,36 @@ class SquidAPI:
             if booking.get("container"):
                 booking["container_id"] = booking["container"].get("id")
                 booking["container_number"] = booking["container"].get("number")
+            else:
+                booking["container_id"] = None
+                booking["container_number"] = None
+            # Remove container object from booking
             del booking["container"]
 
             # Process delivery location information
             if booking.get("delivery_location"):
                 booking["delivery_location_id"] = booking["delivery_location"].get("id")
+            else:
+                booking["delivery_location_id"] = None
+            # Remove delivery location object from booking
             del booking["delivery_location"]
 
             # Flatten import_status fields
             if booking.get("import_status"):
                 for key, value in booking["import_status"].items():
                     booking[f"import_{key}"] = value
+            else:
+                booking["import_status"] = None
+            # Remove import_status object from booking
             del booking["import_status"]
 
             # Flatten export_status fields
             if booking.get("export_status"):
                 for key, value in booking["export_status"].items():
                     booking[f"export_{key}"] = value
+            else:
+                booking["export_status"] = None
+            # Remove export_status object from booking
             del booking["export_status"]
 
             # Process transports
