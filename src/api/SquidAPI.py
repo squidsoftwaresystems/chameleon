@@ -23,16 +23,21 @@ class SquidAPI:
         self.__API_URL = "https://api.squid.software"
         self.__OSRM_URL = "https://osrm.squid.software"
 
+        # Base path for cached data file storage
+        self.__BASEDIR = "./data"
+        if not os.path.exists(self.__BASEDIR):
+            os.mkdir(self.__BASEDIR)
+
         # Define paths for cached data files
-        self.__LOCATIONPATH = "../../data/locations.csv"
-        self.__TRUCKPATH = "../../data/trucks.csv"
-        self.__DRIVERPATH = "../../data/drivers.csv"
-        self.__SCHEDULEPATH = "../../data/schedules.csv"
-        self.__CHASSISPATH = "../../data/chassis.csv"
-        self.__BOOKINGSPATH = "../../data/bookings.csv"
-        self.__TRANSPORTSPATH = "../../data/transports.csv"
-        self.__ROUTESPATH = "../../data/routes.csv"
-        self.__TRUCKSTARTSPATH = "../../data/truck_starts.csv"
+        self.__LOCATIONPATH = f"{self.__BASEDIR}/locations.csv"
+        self.__TRUCKPATH = f"{self.__BASEDIR}/trucks.csv"
+        self.__DRIVERPATH = f"{self.__BASEDIR}/drivers.csv"
+        self.__SCHEDULEPATH = f"{self.__BASEDIR}/schedules.csv"
+        self.__CHASSISPATH = f"{self.__BASEDIR}/chassis.csv"
+        self.__BOOKINGSPATH = f"{self.__BASEDIR}/bookings.csv"
+        self.__TRANSPORTSPATH = f"{self.__BASEDIR}/transports.csv"
+        self.__ROUTESPATH = f"{self.__BASEDIR}/routes.csv"
+        self.__TRUCKSTARTSPATH = f"{self.__BASEDIR}/truck_starts.csv"
 
         # Load or fetch all required data
         self.__fetchLocations()
