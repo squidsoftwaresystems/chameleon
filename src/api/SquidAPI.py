@@ -42,13 +42,13 @@ class SquidAPI:
         self.__fetchChassis()
         self.__fetchBookings(day)
 
-    def __api_call(self, endpoint: str, args: str = ""):
+    def __api_call(self, endpoint: str, args: Optional[str] = ""):
         """Make a single API request to the specified endpoint"""
         return requests.get(
             f"{self.__API_URL}/{endpoint}?{args}", headers={"Api-Key": self.__API_KEY}
         ).json()
 
-    def __paginated_api_call(self, endpoint: str, args: str = ""):
+    def __paginated_api_call(self, endpoint: Optional[str], args: Optional[str] = ""):
         """Handle pagination to retrieve complete datasets from the API"""
         all_results = []
         offset = 0
@@ -565,7 +565,11 @@ class SquidAPI:
         return self.schedules
 
     def getSchedulesForDriver(
-        self, driver_id: str, type: str = None, day: str = None, date: str = None
+        self,
+        driver_id: str,
+        type: Optional[str] = None,
+        day: Optional[str] = None,
+        date: Optional[str] = None,
     ):
         """Retrieve schedules for a specific driver with optional filters"""
         ret = self.schedules[self.schedules.driver == driver_id]
@@ -640,7 +644,12 @@ class SquidAPI:
         """Find a booking by ID"""
         return self.bookings.loc[id]
 
-    def getTransports(self, adr: bool = None, area: str = None, modality: str = None):
+    def getTransports(
+        self,
+        adr: Optional[bool] = None,
+        area: Optional[str] = None,
+        modality: Optional[str] = None,
+    ):
         """Retrieve transports with optional filtering parameters"""
         ret = self.transports
         if adr is not None:
