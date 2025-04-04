@@ -42,8 +42,6 @@ pub struct Booking {
     dropoff_open_time: Time,
     #[pyo3(get, set)]
     dropoff_close_time: Time,
-    #[pyo3(get, set)]
-    direct_driving_time: TimeDelta,
 }
 
 #[pymethods]
@@ -57,7 +55,6 @@ impl Booking {
         pickup_close_time: Time,
         dropoff_open_time: Time,
         dropoff_close_time: Time,
-        direct_driving_time: TimeDelta,
     ) -> Self {
         Self {
             cargo,
@@ -67,7 +64,6 @@ impl Booking {
             pickup_close_time,
             dropoff_open_time,
             dropoff_close_time,
-            direct_driving_time,
         }
     }
 }
@@ -186,7 +182,7 @@ impl Schedule {
 #[pymethods]
 impl Schedule {
     /// Generates a textual representation of the schedule
-    pub fn __repr__(&self) -> String {
+    pub fn repr(&self, schedule_generator: &ScheduleGenerator) -> String {
         let mut out = String::new();
         for (truck, checkpoints) in self.truck_checkpoints.iter() {
             out.push_str(&format!("Truck {truck:?}:\n"));
@@ -194,11 +190,22 @@ impl Schedule {
                 out.push_str(&format!(
                     "Time: {}, Terminal {:?}: Pick up {:?}, drop off {:?}\n",
                     checkpoint.time,
-                    checkpoint.terminal,
+                    schedule_generator
+                        .terminal_mapper
+                        .map(checkpoint.terminal.0)
+                        .unwrap(),
                     // Display as vector
-                    checkpoint.pickup_cargo.iter().collect::<Vec<_>>(),
+                    checkpoint
+                        .pickup_cargo
+                        .iter()
+                        .map(|cargo| schedule_generator.cargo_mapper.map(cargo.0).unwrap())
+                        .collect::<Vec<_>>(),
                     // Display as vector
-                    checkpoint.dropoff_cargo.iter().collect::<Vec<_>>(),
+                    checkpoint
+                        .dropoff_cargo
+                        .iter()
+                        .map(|cargo| schedule_generator.cargo_mapper.map(cargo.0).unwrap())
+                        .collect::<Vec<_>>(),
                 ));
             }
             out.push_str("\n\n");
@@ -215,6 +222,11 @@ struct DrivingTimesCache {
 }
 
 impl DrivingTimesCache {
+    fn new() -> Self {
+        Self {
+            data: DrivingTimesMap::new(),
+        }
+    }
     fn from_map(map: DrivingTimesMap) -> Self {
         Self { data: map }
     }
@@ -229,10 +241,13 @@ impl DrivingTimesCache {
             .data
             .entry((from, to))
             .or_insert_with(|| {
-                // TODO: compute distance somehow
-                unimplemented!()
+                // TODO: add a way to do this
+                unimplemented!(
+                    "Being able to get driving times on-demand hasn't been implemented yet, requested driving time {:?}->{:?}", from, to
+                );
             })
             .to_owned();
+
         assert!(out >= 0);
         out
     }
@@ -270,6 +285,10 @@ pub struct ScheduleGenerator {
     planning_period: Interval,
 
     rng: Xoshiro256PlusPlus,
+
+    terminal_mapper: CounterMapper<String>,
+    cargo_mapper: CounterMapper<String>,
+    truck_mapper: CounterMapper<String>,
 }
 
 impl ScheduleGenerator {
@@ -305,7 +324,8 @@ impl ScheduleGenerator {
     ) -> TimeDelta {
         let from = from.unwrap_or_else(|| self.truck_starting_data.get(&truck).unwrap().1);
         if let Some(to) = to {
-            self.driving_times_cache.get_driving_time(from, to)
+            let out = self.driving_times_cache.get_driving_time(from, to);
+            out
         } else {
             0
         }
@@ -803,6 +823,8 @@ impl ScheduleGenerator {
         let mut trucks = BTreeSet::new();
         let mut truck_starting_data = HashMap::new();
 
+        let mut terminals = BTreeSet::new();
+
         for (truck_id, starting_terminal_id) in truck_data.into_iter() {
             let truck = Truck(truck_mapper.add_or_find(&truck_id));
             let starting_terminal = Terminal(terminal_mapper.add_or_find(&starting_terminal_id));
@@ -818,9 +840,8 @@ impl ScheduleGenerator {
                 .unwrap()
                 .get_start_time();
             truck_starting_data.insert(truck, (start_time, starting_terminal));
+            terminals.insert(starting_terminal);
         }
-
-        let mut terminals = BTreeSet::new();
 
         // Calculate pickup and dropoff times
         let mut pickup_times = HashMap::new();
@@ -828,8 +849,6 @@ impl ScheduleGenerator {
 
         let mut cargo_booking_info = HashMap::new();
         let mut cargo_by_terminals = HashMap::new();
-
-        let mut driving_times_map: DrivingTimesMap = HashMap::new();
 
         for booking in booking_data.iter() {
             // Remove irrelevant bookings
@@ -885,9 +904,6 @@ impl ScheduleGenerator {
             pickup_times.insert(cargo, pickup_intervals);
             dropoff_times.insert(cargo, dropoff_intervals);
 
-            // Record driving times on direct routes
-            driving_times_map.insert((from_terminal, to_terminal), booking.direct_driving_time);
-
             // Update delivery info
             let booking_info = BookingInformation {
                 from: from_terminal,
@@ -900,10 +916,8 @@ impl ScheduleGenerator {
             cargo_booking_info.insert(cargo, booking_info);
         }
 
-        dbg!(terminals.len());
-
         Ok(Self {
-            driving_times_cache: DrivingTimesCache::from_map(driving_times_map),
+            driving_times_cache: DrivingTimesCache::new(),
             cargo_by_terminals,
             pickup_times,
             dropoff_times,
@@ -913,6 +927,9 @@ impl ScheduleGenerator {
             truck_starting_data,
             planning_period,
             rng: Xoshiro256PlusPlus::seed_from_u64(0),
+            terminal_mapper,
+            cargo_mapper,
+            truck_mapper,
         })
     }
 
@@ -1011,5 +1028,37 @@ impl ScheduleGenerator {
             free_trucks_proportion,
             driving_time_score,
         ]
+    }
+
+    pub fn get_terminal_ids(&self) -> Vec<TerminalID> {
+        self.terminals
+            .iter()
+            .map(|terminal| self.terminal_mapper.map(terminal.0).unwrap())
+            .collect()
+    }
+
+    /// Reset the driving times used by the algorithm
+    /// terminal_id_order gives the order of terminals in `driving_times`
+    /// `driving_times` are the mappings of terminal ids to driving times to all
+    /// the terminals (including itself), in the order given in `terminal_id_order`
+    pub fn set_driving_times(
+        &mut self,
+        terminal_id_order: Vec<TerminalID>,
+        driving_times: HashMap<TerminalID, Vec<i64>>,
+    ) {
+        let mut driving_times_reformatted = HashMap::new();
+        for (from_id, times) in driving_times.iter() {
+            for (to_index, time) in times.iter().enumerate() {
+                assert!(*time >= 0);
+
+                let from_terminal = Terminal(self.terminal_mapper.reverse_map(from_id).unwrap());
+                let to_id = terminal_id_order.get(to_index).unwrap();
+                let to_terminal = Terminal(self.terminal_mapper.reverse_map(to_id).unwrap());
+
+                driving_times_reformatted.insert((from_terminal, to_terminal), *time);
+            }
+        }
+
+        self.driving_times_cache = DrivingTimesCache::from_map(driving_times_reformatted)
     }
 }

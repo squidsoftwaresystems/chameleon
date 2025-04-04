@@ -841,6 +841,12 @@ class SquidAPI:
         """
         if len(coords) < 2:
             return None
+
+        # convert from numpy floats to python floats
+        coords = [
+            [float(val) for val in row] for row in coords
+        ]
+
         res = self.__osrm_call("table", f"coordinates={coords}")
         return {
             "distances": res["distances"],
@@ -854,6 +860,19 @@ class SquidAPI:
         coords = []
         for code in codes:
             loc = self.getLocation(code)
+            if loc is None:
+                return None
+            coords.append([loc.longitude, loc.latitude])
+
+        return self.getCoordMatrix(coords)
+
+    def getLocatonIdMatrix(self, ids: List[str]) -> Optional[Dict[str, List[List[float]]]]:
+        """
+        Get the distance matrix between locations using their ids
+        """
+        coords = []
+        for id in ids:
+            loc = self.getLocationById(id)
             if loc is None:
                 return None
             coords.append([loc.longitude, loc.latitude])

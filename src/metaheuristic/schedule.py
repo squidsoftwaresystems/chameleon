@@ -24,6 +24,9 @@ def make_schedule_generator(
     truck_data: pd.DataFrame,
     requested_transports: pd.DataFrame,
     planning_period: Tuple[pd.Timestamp, pd.Timestamp],
+    get_driving_times: Callable[
+        [List[TerminalID]], Dict[TerminalID, List[pd.Timedelta]]
+    ],
 ) -> ScheduleGenerator:
     """
     Creates a blank schedule, given dataframes for data
@@ -53,9 +56,11 @@ def make_schedule_generator(
             Name: pickup_close_time,    dtype: datetime64[ns]  Time before which cargo must be picked up
             Name: dropoff_open_time,    dtype: datetime64[ns]  Time from which cargo can be dropped off
             Name: dropoff_close_time,   dtype: datetime64[ns] Time before which cargo must be dropped off
-            Name: driving_time,      dtype: timedelta64[ns]
     :param planning_period an interval during which all the operations need
     to be planned to take place
+
+    :param get_driving_times: a callback that takes in a list of terminals
+    and returns a matrix of driving times between them
     """
 
     def timestamp_to_seconds(timestamp: pd.Timestamp):
@@ -87,7 +92,6 @@ def make_schedule_generator(
             pickup_close_time=timestamp_to_seconds(row["pickup_close_time"]),
             dropoff_open_time=timestamp_to_seconds(row["dropoff_open_time"]),
             dropoff_close_time=timestamp_to_seconds(row["dropoff_close_time"]),
-            direct_driving_time=timedelta_to_seconds(row["driving_time"]),
         )
         for transport_id, row in requested_transports.iterrows()
     ]
@@ -97,9 +101,24 @@ def make_schedule_generator(
         timestamp_to_seconds(planning_period[1]),
     )
 
-    return ScheduleGenerator(
+    out = ScheduleGenerator(
         _terminal_data, _truck_data, _transpost_data, _planning_period
     )
+
+    # Now set up the driving times
+    # Sort for consistency
+    relevant_terminal_ids = sorted(out.get_terminal_ids())
+    driving_times = get_driving_times(relevant_terminal_ids)
+    # convert to TimeDelta
+
+    driving_times = {
+        key: [timedelta_to_seconds(time) for time in driving_times[key]]
+        for key in driving_times.keys()
+    }
+
+    out.set_driving_times(relevant_terminal_ids, driving_times)
+
+    return out
 
 
 def __make_schedule_data_from_api(
@@ -213,10 +232,6 @@ def __make_schedule_data_from_api(
                 "dropoff_close_time": booking["cargo_closing"],
                 "from_terminal": routes.iloc[-1]["location_id"],
                 "to_terminal": routes.iloc[0]["location_id"],
-                "driving_time": pd.to_timedelta(
-                    10000, unit="m"
-                ),  # TODO: remove this from here,
-                # calculate it differently
             }
         )
 
@@ -225,7 +240,12 @@ def __make_schedule_data_from_api(
     # TODO: add more driving times, potentially by passing in a callback
     # for calculating driving times
 
-    return (terminal_data, truck_data, requested_transports, planning_period)
+    return (
+        terminal_data,
+        truck_data,
+        requested_transports,
+        planning_period,
+    )
 
 
 def invalidate_schedule_data_cache(
@@ -241,16 +261,38 @@ def invalidate_schedule_data_cache(
         return False
 
 
-def cached_make_schedule_generator_from_api(
+def cached_make_schedule_data_from_api(
     api: SquidAPI,
     planning_period: Tuple[pd.Timestamp, pd.Timestamp],
     pkl_filepath: str = "data/schedule_data.pkl",
-) -> ScheduleGenerator:
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    Tuple[pd.Timestamp, pd.Timestamp],
+    Callable[[List[TerminalID]], Dict[TerminalID, List[pd.Timedelta]]],
+]:
     """
     Try to load a cache and make a schedule generator from that
     If not successful, instead load data from API, cache it, and
     return a schedule generator based on that
     """
+
+    def get_driving_times(terminal_ids):
+        matrix = api.getLocatonIdMatrix(terminal_ids)
+
+        out = {}
+
+        # Convert them to timedeltas
+        for i, from_id in enumerate(terminal_ids):
+            row = []
+            for j in range(len(terminal_ids)):
+                row.append(
+                    pd.to_timedelta(matrix["durations"][i][j], unit="s")
+                )
+            out[from_id] = row
+
+        return out
 
     def refetch():
         # Could not load data, need to re-compute and cache
@@ -270,7 +312,7 @@ def cached_make_schedule_generator_from_api(
     except OSError:
         data = refetch()
 
-    return make_schedule_generator(*data)
+    return (*data, get_driving_times)
 
 
 def get_scores_calculator(

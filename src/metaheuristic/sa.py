@@ -53,9 +53,9 @@ def __is_better(deltas: npt.NDArray) -> bool:
 def sa_solve(
     initial_solution: Schedule,
     schedule_generator: ScheduleGenerator,
+    num_iterations: int,
     initial_temperature: float = 10.0,
     final_temperature: float = 1e-1,
-    num_iterations: int = 10000,
     num_tries_per_action: int = 10,
     restart_probability=0.001,
     seed=0,
@@ -65,9 +65,9 @@ def sa_solve(
 
     @param initial_solution initial guess for the solution
     @param schedule_generator algorithm for generating neighbouring schedules
+    @param num_iterations number of iterations to perform before terminating
     @param initial_temperature starting 'temperature' for the annealing process
     @param final_temperature final 'temperature' for the annealing process
-    @param num_iterations number of iterations to perform before terminating
     @param num_tries_per_action a parameter for generation of neighbours
     @param restart_probability probability of going back to a best_solution
     @param seed: seed for the rng
