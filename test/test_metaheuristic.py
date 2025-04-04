@@ -6,8 +6,8 @@ import pytest
 import src.api.SquidAPI as API
 from src.metaheuristic.sa import sa_solve
 from src.metaheuristic.schedule import (
+    cached_make_schedule_generator_from_api,
     make_schedule_generator,
-    make_schedule_generator_from_api,
 )
 
 
@@ -98,10 +98,11 @@ def run_sa_with_seed(seed):
 
 def test_loading_api_data():
     planning_period = (
-        pd.Timestamp("2025-02-19T00"),
-        pd.Timestamp("2025-02-20T00"),
+        pd.Timestamp("2025-03-24T00"),
+        pd.Timestamp("2025-03-25T00"),
     )
-    schedule_generator = make_schedule_generator_from_api(
+
+    schedule_generator = cached_make_schedule_generator_from_api(
         API(), planning_period
     )
     schedule = schedule_generator.empty_schedule()

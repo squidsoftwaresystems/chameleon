@@ -1,3 +1,5 @@
+import os
+import pickle
 from typing import Callable, Dict, List, Tuple, cast
 
 import numpy as np
@@ -100,10 +102,15 @@ def make_schedule_generator(
     )
 
 
-def make_schedule_generator_from_api(
+def __make_schedule_data_from_api(
     api: SquidAPI,
     planning_period: Tuple[pd.Timestamp, pd.Timestamp],
-) -> Tuple[ScheduleGenerator,]:
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.DataFrame,
+    Tuple[pd.Timestamp, pd.Timestamp],
+]:
     """
     Create a schedule using the API data
     """
@@ -218,9 +225,52 @@ def make_schedule_generator_from_api(
     # TODO: add more driving times, potentially by passing in a callback
     # for calculating driving times
 
-    return make_schedule_generator(
-        terminal_data, truck_data, requested_transports, planning_period
-    )
+    return (terminal_data, truck_data, requested_transports, planning_period)
+
+
+def invalidate_schedule_data_cache(
+    pkl_filepath: str = "data/schedule_data.pkl",
+) -> bool:
+    """
+    Try invalidate the cache, return whether we were successful or not
+    """
+    try:
+        os.remove(pkl_filepath)
+        return True
+    except OSError:
+        return False
+
+
+def cached_make_schedule_generator_from_api(
+    api: SquidAPI,
+    planning_period: Tuple[pd.Timestamp, pd.Timestamp],
+    pkl_filepath: str = "data/schedule_data.pkl",
+) -> ScheduleGenerator:
+    """
+    Try to load a cache and make a schedule generator from that
+    If not successful, instead load data from API, cache it, and
+    return a schedule generator based on that
+    """
+
+    def refetch():
+        # Could not load data, need to re-compute and cache
+        data = __make_schedule_data_from_api(api, planning_period)
+        with open(pkl_filepath, "wb") as f:
+            pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
+        return data
+
+    try:
+        with open(pkl_filepath, "rb") as f:
+            data = pickle.load(f)
+
+        # Check if the planning period is the same
+        if data[3] != planning_period:
+            invalidate_schedule_data_cache(pkl_filepath)
+            data = refetch()
+    except OSError:
+        data = refetch()
+
+    return make_schedule_generator(*data)
 
 
 def get_scores_calculator(

@@ -25,7 +25,7 @@ pub struct Cargo(usize);
 pub struct Truck(usize);
 
 #[pyclass]
-#[derive(FromPyObject)]
+#[derive(FromPyObject, Debug)]
 /// The representation of request for delivery that the rust code gets from python
 pub struct Booking {
     #[pyo3(get, set)]
@@ -899,6 +899,8 @@ impl ScheduleGenerator {
                 .insert(cargo);
             cargo_booking_info.insert(cargo, booking_info);
         }
+
+        dbg!(terminals.len());
 
         Ok(Self {
             driving_times_cache: DrivingTimesCache::from_map(driving_times_map),
