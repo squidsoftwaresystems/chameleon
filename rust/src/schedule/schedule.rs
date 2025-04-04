@@ -7,56 +7,33 @@ use pyo3::{exceptions::PyTypeError, pyclass, pymethods, FromPyObject, PyResult};
 use rand::{seq::IteratorRandom, Rng, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 
-use super::intervals::*;
+use super::{counter_mapper::CounterMapper, intervals::*};
+
+type TerminalID = String;
+type CargoID = String;
+type TruckID = String;
 
 // NOTE: this prevents recognising them as the same type, and e.g.
 // assigning a truck to a cargo by mistake
-#[pyclass]
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
-pub struct Terminal(u64);
+pub struct Terminal(usize);
 
-#[pymethods]
-impl Terminal {
-    #[new]
-    pub fn new(terminal: u64) -> Self {
-        Terminal(terminal)
-    }
-}
-
-#[pyclass]
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
-pub struct Cargo(u64);
+pub struct Cargo(usize);
 
-#[pymethods]
-impl Cargo {
-    #[new]
-    pub fn new(cargo: u64) -> Self {
-        Cargo(cargo)
-    }
-}
-
-#[pyclass]
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
-pub struct Truck(u64);
-
-#[pymethods]
-impl Truck {
-    #[new]
-    pub fn new(truck: u64) -> Self {
-        Truck(truck)
-    }
-}
+pub struct Truck(usize);
 
 #[pyclass]
 #[derive(FromPyObject)]
 /// The representation of request for delivery that the rust code gets from python
 pub struct Booking {
     #[pyo3(get, set)]
-    cargo: Cargo,
+    cargo: CargoID,
     #[pyo3(get, set)]
-    from_terminal: Terminal,
+    from_terminal: TerminalID,
     #[pyo3(get, set)]
-    to_terminal: Terminal,
+    to_terminal: TerminalID,
     #[pyo3(get, set)]
     pickup_open_time: Time,
     #[pyo3(get, set)]
@@ -73,9 +50,9 @@ pub struct Booking {
 impl Booking {
     #[new]
     pub fn new(
-        cargo: Cargo,
-        from_terminal: Terminal,
-        to_terminal: Terminal,
+        cargo: CargoID,
+        from_terminal: TerminalID,
+        to_terminal: TerminalID,
         pickup_open_time: Time,
         pickup_close_time: Time,
         dropoff_open_time: Time,
@@ -126,7 +103,6 @@ pub struct Schedule {
     /// first checkpoint representing the first terminal
     truck_checkpoints: BTreeMap<Truck, Vec<Checkpoint>>,
 
-    #[pyo3(get, set)]
     /// Map from cargo that was scheduled to truck taking it
     scheduled_cargo_truck: BTreeMap<Cargo, Truck>,
 
@@ -137,11 +113,11 @@ pub struct Schedule {
 impl Schedule {
     fn get_checkpoint_mut(
         &mut self,
-        truck: &Truck,
+        truck: Truck,
         checkpoint_index: usize,
     ) -> Option<&mut Checkpoint> {
         self.truck_checkpoints
-            .get_mut(truck)?
+            .get_mut(&truck)?
             .get_mut(checkpoint_index)
     }
 
@@ -590,14 +566,14 @@ impl ScheduleGenerator {
     fn find_random_reschedule_time(
         &mut self,
         schedule: &Schedule,
-        truck: &Truck,
+        truck: Truck,
         old_checkpoint_index: usize,
         new_pickup: &BTreeSet<Cargo>,
         new_dropoff: &BTreeSet<Cargo>,
     ) -> Option<Time> {
         let old_checkpoint = schedule
             .truck_checkpoints
-            .get(truck)
+            .get(&truck)
             .unwrap()
             .get(old_checkpoint_index)
             .unwrap();
@@ -611,11 +587,11 @@ impl ScheduleGenerator {
             .intersect_all();
 
         let (checkpoint_before, checkpoint_after) =
-            schedule.get_prev_and_next_checkpoints(*truck, old_checkpoint);
+            schedule.get_prev_and_next_checkpoints(truck, old_checkpoint);
 
         let driving_restriction_intervals =
             IntervalWithDataChain::from_interval(self.get_driving_time_constraints(
-                *truck,
+                truck,
                 checkpoint_before,
                 checkpoint_after,
                 old_checkpoint.terminal,
@@ -625,6 +601,7 @@ impl ScheduleGenerator {
             pickup_restriction_intervals,
             dropoff_restriction_intervals,
             driving_restriction_intervals,
+            IntervalWithDataChain::from_interval(self.planning_period.clone()),
         ]
         .iter()
         .intersect_all();
@@ -734,25 +711,27 @@ impl ScheduleGenerator {
         // checkpoint time
         let new_start_checkpoint_time = self.find_random_reschedule_time(
             &out,
-            truck,
+            *truck,
             start_checkpoint_index,
             &new_start_checkpoint_pickup,
             &start_checkpoint.dropoff_cargo,
         )?;
         let new_start_checkpoint = out
-            .get_checkpoint_mut(truck, start_checkpoint_index)
+            .get_checkpoint_mut(*truck, start_checkpoint_index)
             .unwrap();
         new_start_checkpoint.pickup_cargo.insert(chosen_cargo);
         new_start_checkpoint.time = new_start_checkpoint_time;
 
         let new_end_checkpoint_time = self.find_random_reschedule_time(
             &out,
-            truck,
+            *truck,
             end_checkpoint_index,
             &end_checkpoint.pickup_cargo,
             &new_end_checkpoint_dropoff,
         )?;
-        let new_end_checkpoint = out.get_checkpoint_mut(truck, end_checkpoint_index).unwrap();
+        let new_end_checkpoint = out
+            .get_checkpoint_mut(*truck, end_checkpoint_index)
+            .unwrap();
         new_end_checkpoint.dropoff_cargo.insert(chosen_cargo);
         new_end_checkpoint.time = new_end_checkpoint_time;
 
@@ -790,27 +769,44 @@ impl ScheduleGenerator {
     /// terminal_data is a dict sending a terminal id to (opening_time, closing_time)
     /// truck_data is a dict sending truck id to starting_terminal
     pub fn new(
-        terminal_data: HashMap<Terminal, (Time, Time)>,
-        truck_data: HashMap<Truck, Terminal>,
+        terminal_data: HashMap<TerminalID, (Time, Time)>,
+        truck_data: HashMap<TruckID, TerminalID>,
         booking_data: Vec<Booking>,
         planning_period: (Time, Time),
     ) -> PyResult<Self> {
+        // We want to map between the internally-used
+        // integer ids and the externally-used String ids.
+        // This is done because it is easier to deal with
+        // integers and ownership, while Strings would make
+        // maintenance a bit more tricky
+        let mut terminal_mapper = CounterMapper::new();
+        let mut cargo_mapper = CounterMapper::new();
+        let mut truck_mapper = CounterMapper::new();
+
+        let planning_period = interval_or_error(planning_period.0, planning_period.1)?;
+        let planning_period_as_interval_chain =
+            IntervalChain::from_interval(planning_period.clone());
+
         // Calculate terminal_open_intervals
         let mut terminal_open_intervals = HashMap::new();
-        for (terminal, (opening_time, closing_time)) in terminal_data.iter() {
+        for (terminal_id, (opening_time, closing_time)) in terminal_data.iter() {
+            let terminal = Terminal(terminal_mapper.add_or_find(terminal_id));
             // If it is a valid interval, create
             let interval = interval_or_error(*opening_time, *closing_time)?;
             // TODO: make opening and closing times repeat day on day
             // TODO: if you do that, be sure to set the starting point to be sane (and
             // not e.g. 0 unix time) to avoid considering really old time intervals
             let intervals = IntervalChain::from_interval(interval);
-            terminal_open_intervals.insert(*terminal, intervals);
+            terminal_open_intervals.insert(terminal, intervals);
         }
 
         let mut trucks = BTreeSet::new();
         let mut truck_starting_data = HashMap::new();
 
-        for (truck, starting_terminal) in truck_data.into_iter() {
+        for (truck_id, starting_terminal_id) in truck_data.into_iter() {
+            let truck = Truck(truck_mapper.add_or_find(&truck_id));
+            let starting_terminal = Terminal(terminal_mapper.add_or_find(&starting_terminal_id));
+
             trucks.insert(truck);
             // TODO: in the future, find the time when a driver can start working
             // in some other way
@@ -824,6 +820,8 @@ impl ScheduleGenerator {
             truck_starting_data.insert(truck, (start_time, starting_terminal));
         }
 
+        let mut terminals = BTreeSet::new();
+
         // Calculate pickup and dropoff times
         let mut pickup_times = HashMap::new();
         let mut dropoff_times = HashMap::new();
@@ -834,39 +832,66 @@ impl ScheduleGenerator {
         let mut driving_times_map: DrivingTimesMap = HashMap::new();
 
         for booking in booking_data.iter() {
-            let cargo = booking.cargo;
-            // Pickup intervals that don't consider terminal opening times
-            let raw_pickup_intervals = IntervalChain::from_interval(interval_or_error(
-                booking.pickup_open_time,
-                booking.pickup_close_time,
-            )?);
-            let raw_dropoff_intervals = IntervalChain::from_interval(interval_or_error(
-                booking.dropoff_open_time,
-                booking.dropoff_close_time,
-            )?);
+            // Remove irrelevant bookings
+            // Note that this also includes the bookings that are too far in the future -
+            // we are not anticipating anything after the planning period ends.
+            // We want to run this algorithm with a relatively large look-ahead,
+            // so that all relevant bookings are within the planning_period. In
+            // this case, if our plan near the end of the period is suboptimal
+            // because we didn't anticipate bookings after the end of
+            // planning_period, that is not an issue: any plans for that time
+            // become stale as the situation changes
 
-            let from_terminal_open_intervals =
-                terminal_open_intervals.get(&booking.from_terminal).unwrap();
+            // TODO: we still might want to consider this in order to e.g.
+            // handle scheduling not-urgent containers more frequently
 
-            let to_terminal_open_intervals =
-                terminal_open_intervals.get(&booking.to_terminal).unwrap();
+            // To do that, first shrink the intervals, and then remove the empty ones
 
-            let pickup_intervals = from_terminal_open_intervals.intersect(&raw_pickup_intervals);
-            let dropoff_intervals = to_terminal_open_intervals.intersect(&raw_dropoff_intervals);
+            let from_terminal = Terminal(terminal_mapper.add_or_find(&booking.from_terminal));
+            let to_terminal = Terminal(terminal_mapper.add_or_find(&booking.to_terminal));
 
+            let pickup_intervals = [
+                terminal_open_intervals.get(&from_terminal).unwrap().clone(),
+                IntervalChain::from_interval(interval_or_error(
+                    booking.pickup_open_time,
+                    booking.pickup_close_time,
+                )?),
+                planning_period_as_interval_chain.clone(),
+            ]
+            .iter()
+            .intersect_all();
+
+            let dropoff_intervals = [
+                terminal_open_intervals.get(&to_terminal).unwrap().clone(),
+                IntervalChain::from_interval(interval_or_error(
+                    booking.dropoff_open_time,
+                    booking.dropoff_close_time,
+                )?),
+                planning_period_as_interval_chain.clone(),
+            ]
+            .iter()
+            .intersect_all();
+
+            // Remove the deliveries we can't do
+            if pickup_intervals.is_empty() || dropoff_intervals.is_empty() {
+                continue;
+            }
+
+            // Only add terminals which are referenced in a relevant booking
+            terminals.insert(from_terminal);
+            terminals.insert(to_terminal);
+
+            let cargo = Cargo(cargo_mapper.add_or_find(&booking.cargo));
             pickup_times.insert(cargo, pickup_intervals);
             dropoff_times.insert(cargo, dropoff_intervals);
 
             // Record driving times on direct routes
-            driving_times_map.insert(
-                (booking.from_terminal, booking.to_terminal),
-                booking.direct_driving_time,
-            );
+            driving_times_map.insert((from_terminal, to_terminal), booking.direct_driving_time);
 
             // Update delivery info
             let booking_info = BookingInformation {
-                from: booking.from_terminal,
-                to: booking.to_terminal,
+                from: from_terminal,
+                to: to_terminal,
             };
             cargo_by_terminals
                 .entry((booking_info.from, booking_info.to))
@@ -881,10 +906,10 @@ impl ScheduleGenerator {
             pickup_times,
             dropoff_times,
             cargo_booking_info,
-            terminals: terminal_data.keys().cloned().collect(),
+            terminals,
             trucks,
             truck_starting_data,
-            planning_period: interval_or_error(planning_period.0, planning_period.1)?,
+            planning_period,
             rng: Xoshiro256PlusPlus::seed_from_u64(0),
         })
     }

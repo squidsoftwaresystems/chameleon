@@ -1,9 +1,10 @@
-import requests
-import pandas as pd
 import os
-from dotenv import load_dotenv
-from typing import Optional, List, Dict, Union
 from datetime import date, datetime
+from typing import Dict, List, Optional, Union
+
+import pandas as pd
+import requests
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -691,7 +692,7 @@ class SquidAPI:
         transports = self.getTransportsForBooking(booking_id)
         routes = []
         for transport in transports.itertuples():
-            routes.append(self.getRoutesForTransport(transport.id))
+            routes.append(self.getRoutesForTransport(transport.Index))
         return pd.concat(routes) if routes else pd.DataFrame()
 
     def getBookingsByCargoWindow(self, start: datetime, end: datetime) -> pd.DataFrame:

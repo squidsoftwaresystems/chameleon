@@ -13,6 +13,7 @@ pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
+/// A non-empty interval of time
 pub struct IntervalWithData<T>
 where
     T: Eq,
@@ -246,6 +247,14 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
             .iter()
             .map(|interval| interval.get_duration())
             .sum()
+    }
+
+    /// Whether the total length of the intervals is 0
+    pub fn is_empty(&self) -> bool {
+        // since the individual intervals have a positive
+        // length, the only way the total length can be 0
+        // is if there are no intervals
+        self.intervals.is_empty()
     }
 }
 
