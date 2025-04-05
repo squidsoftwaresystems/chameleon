@@ -185,7 +185,8 @@ impl Schedule {
     pub fn repr(&self, schedule_generator: &ScheduleGenerator) -> String {
         let mut out = String::new();
         for (truck, checkpoints) in self.truck_checkpoints.iter() {
-            out.push_str(&format!("Truck {truck:?}:\n"));
+            let truck_id = schedule_generator.truck_mapper.map(truck.0).unwrap();
+            out.push_str(&format!("Truck {truck_id:?}:\n"));
             for checkpoint in checkpoints.iter() {
                 out.push_str(&format!(
                     "Time: {}, Terminal {:?}: Pick up {:?}, drop off {:?}\n",
@@ -209,6 +210,44 @@ impl Schedule {
                 ));
             }
             out.push_str("\n\n");
+        }
+        out
+    }
+
+    /// Represents the schedule as a list of tuples
+    ///(truck, datetime, terminal, cargo, was_picked_up)
+    /// where if was_picked_up is false, this cargo was dropped off
+    pub fn to_list_of_tuples(
+        &self,
+        schedule_generator: &ScheduleGenerator,
+    ) -> Vec<(TruckID, Time, TerminalID, CargoID, bool)> {
+        let mut out = Vec::new();
+        for (truck, checkpoints) in self.truck_checkpoints.iter() {
+            let truck_id = schedule_generator.truck_mapper.map(truck.0).unwrap();
+            for checkpoint in checkpoints.iter() {
+                let terminal_id = schedule_generator
+                    .terminal_mapper
+                    .map(checkpoint.terminal.0)
+                    .unwrap();
+                for cargo in checkpoint.pickup_cargo.iter() {
+                    out.push((
+                        truck_id.clone(),
+                        checkpoint.time,
+                        terminal_id.clone(),
+                        schedule_generator.cargo_mapper.map(cargo.0).unwrap(),
+                        true,
+                    ));
+                }
+                for cargo in checkpoint.dropoff_cargo.iter() {
+                    out.push((
+                        truck_id.clone(),
+                        checkpoint.time,
+                        terminal_id.clone(),
+                        schedule_generator.cargo_mapper.map(cargo.0).unwrap(),
+                        false,
+                    ));
+                }
+            }
         }
         out
     }
