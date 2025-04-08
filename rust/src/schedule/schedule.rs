@@ -9,9 +9,9 @@ use rand_xoshiro::Xoshiro256PlusPlus;
 
 use super::{counter_mapper::CounterMapper, intervals::*};
 
-type TerminalID = String;
-type CargoID = String;
-type TruckID = String;
+type PyTerminalID = String;
+type PyCargoID = String;
+type PyTruckID = String;
 
 // NOTE: this prevents recognising them as the same type, and e.g.
 // assigning a truck to a cargo by mistake
@@ -26,14 +26,48 @@ pub struct Truck(usize);
 
 #[pyclass]
 #[derive(FromPyObject, Debug)]
+pub struct PyTruckData {
+    #[pyo3(get, set)]
+    starting_terminal: PyTerminalID,
+    #[pyo3(get, set)]
+    max_weight_kg: usize,
+    #[pyo3(get, set)]
+    max_teu: usize,
+}
+
+#[pymethods]
+impl PyTruckData {
+    #[new]
+    pub fn new(starting_terminal: PyTerminalID, max_weight_kg: usize, max_teu: usize) -> Self {
+        Self {
+            starting_terminal,
+            max_weight_kg,
+            max_teu,
+        }
+    }
+}
+
+pub struct TruckData {
+    starting_terminal: Terminal,
+    start_time: Time,
+    max_weight_kg: usize,
+    max_teu: usize,
+}
+
+#[pyclass]
+#[derive(FromPyObject, Debug)]
 /// The representation of request for delivery that the rust code gets from python
-pub struct Booking {
+pub struct PyBooking {
     #[pyo3(get, set)]
-    cargo: CargoID,
+    cargo: PyCargoID,
     #[pyo3(get, set)]
-    from_terminal: TerminalID,
+    cargo_weight_kg: usize,
     #[pyo3(get, set)]
-    to_terminal: TerminalID,
+    cargo_teu: usize,
+    #[pyo3(get, set)]
+    from_terminal: PyTerminalID,
+    #[pyo3(get, set)]
+    to_terminal: PyTerminalID,
     #[pyo3(get, set)]
     pickup_open_time: Time,
     #[pyo3(get, set)]
@@ -45,12 +79,14 @@ pub struct Booking {
 }
 
 #[pymethods]
-impl Booking {
+impl PyBooking {
     #[new]
     pub fn new(
-        cargo: CargoID,
-        from_terminal: TerminalID,
-        to_terminal: TerminalID,
+        cargo: PyCargoID,
+        cargo_weight_kg: usize,
+        cargo_teu: usize,
+        from_terminal: PyTerminalID,
+        to_terminal: PyTerminalID,
         pickup_open_time: Time,
         pickup_close_time: Time,
         dropoff_open_time: Time,
@@ -58,6 +94,8 @@ impl Booking {
     ) -> Self {
         Self {
             cargo,
+            cargo_weight_kg,
+            cargo_teu,
             from_terminal,
             to_terminal,
             pickup_open_time,
@@ -74,6 +112,8 @@ struct BookingInformation {
     from: Terminal,
     /// Terminal where cargo needs to be dropped off to
     to: Terminal,
+    weight_kg: usize,
+    teu: usize,
 }
 
 type DrivingTimesMap = HashMap<(Terminal, Terminal), TimeDelta>;
@@ -87,6 +127,10 @@ struct Checkpoint {
     terminal: Terminal,
     pickup_cargo: BTreeSet<Cargo>,
     dropoff_cargo: BTreeSet<Cargo>,
+    /// These values describe weight and size left
+    /// after doing the pickups and dropoffs
+    available_teu: usize,
+    available_weight_kg: usize,
 }
 
 #[pyclass]
@@ -185,8 +229,14 @@ impl Schedule {
     pub fn repr(&self, schedule_generator: &ScheduleGenerator) -> String {
         let mut out = String::new();
         for (truck, checkpoints) in self.truck_checkpoints.iter() {
+            // Don't print empty trucks
+            if checkpoints.is_empty() {
+                continue;
+            }
+
             let truck_id = schedule_generator.truck_mapper.map(truck.0).unwrap();
             out.push_str(&format!("Truck {truck_id:?}:\n"));
+
             for checkpoint in checkpoints.iter() {
                 out.push_str(&format!(
                     "Time: {}, Terminal {:?}: Pick up {:?}, drop off {:?}\n",
@@ -220,7 +270,7 @@ impl Schedule {
     pub fn to_list_of_tuples(
         &self,
         schedule_generator: &ScheduleGenerator,
-    ) -> Vec<(TruckID, Time, TerminalID, CargoID, bool)> {
+    ) -> Vec<(PyTruckID, Time, PyTerminalID, PyCargoID, bool)> {
         let mut out = Vec::new();
         for (truck, checkpoints) in self.truck_checkpoints.iter() {
             let truck_id = schedule_generator.truck_mapper.map(truck.0).unwrap();
@@ -318,7 +368,7 @@ pub struct ScheduleGenerator {
     trucks: BTreeSet<Truck>,
 
     /// Terminals when and where the trucks start at
-    truck_starting_data: HashMap<Truck, (Time, Terminal)>,
+    truck_data: HashMap<Truck, TruckData>,
 
     /// Time in which we are allowed to schedule trucks
     planning_period: Interval,
@@ -341,7 +391,9 @@ impl ScheduleGenerator {
 
         // Also check the starting terminal
         if let Some(first_checkpoint) = checkpoints.first() {
-            assert!(first_checkpoint.terminal != self.truck_starting_data.get(&truck).unwrap().1);
+            assert!(
+                first_checkpoint.terminal != self.truck_data.get(&truck).unwrap().starting_terminal
+            );
         }
 
         // Make sure that the times are still in strictly ascending order of time
@@ -361,7 +413,7 @@ impl ScheduleGenerator {
         to: Option<Terminal>,
         truck: Truck,
     ) -> TimeDelta {
-        let from = from.unwrap_or_else(|| self.truck_starting_data.get(&truck).unwrap().1);
+        let from = from.unwrap_or_else(|| self.truck_data.get(&truck).unwrap().starting_terminal);
         if let Some(to) = to {
             let out = self.driving_times_cache.get_driving_time(from, to);
             out
@@ -414,7 +466,7 @@ impl ScheduleGenerator {
             prev.terminal
         } else {
             // Before first interval
-            self.truck_starting_data.get(&truck).unwrap().1
+            self.truck_data.get(&truck).unwrap().starting_terminal
         };
 
         let next_terminal = if let Some(next) = next_checkpoint {
@@ -515,6 +567,21 @@ impl ScheduleGenerator {
             .iter()
             .position(|checkpoint| checkpoint.time > new_time)
             .unwrap_or(new_deliveries.len());
+
+        // Since we are not loading or unloading anything,
+        // the size/weight are the same
+        let (prev_available_teu, prev_available_weight_kg) =
+            if let Some(prev_checkpoint) = prev_checkpoint {
+                (
+                    prev_checkpoint.available_teu,
+                    prev_checkpoint.available_weight_kg,
+                )
+            } else {
+                // Starting size, weight
+                let truck_data = self.truck_data.get(&truck).unwrap();
+                (truck_data.max_teu, truck_data.max_weight_kg)
+            };
+
         new_deliveries.insert(
             new_checkpoint_index,
             Checkpoint {
@@ -522,6 +589,8 @@ impl ScheduleGenerator {
                 terminal: new_terminal,
                 pickup_cargo: BTreeSet::new(),
                 dropoff_cargo: BTreeSet::new(),
+                available_teu: prev_available_teu,
+                available_weight_kg: prev_available_weight_kg,
             },
         );
 
@@ -605,16 +674,33 @@ impl ScheduleGenerator {
         let (cargo, truck) = schedule.scheduled_cargo_truck.iter().choose(rng)?;
         let mut out = schedule.clone();
 
-        out.scheduled_cargo_truck.remove(cargo);
+        let checkpoints = out.truck_checkpoints.get_mut(&truck).unwrap();
+
         // Remove all references to this cargo in truck
-        out.truck_checkpoints
-            .get_mut(&truck)
-            .unwrap()
+        let (start_checkpoint_index, start_checkpoint) = checkpoints
             .iter_mut()
-            .for_each(|checkpoint| {
-                checkpoint.pickup_cargo.remove(cargo);
-                checkpoint.dropoff_cargo.remove(cargo);
-            });
+            .enumerate()
+            .find(|(_, checkpoint)| checkpoint.pickup_cargo.contains(cargo))
+            .unwrap();
+        assert!(start_checkpoint.pickup_cargo.remove(cargo));
+
+        let (end_checkpoint_index, end_checkpoint) = checkpoints
+            .iter_mut()
+            .enumerate()
+            .find(|(_, checkpoint)| checkpoint.dropoff_cargo.contains(cargo))
+            .unwrap();
+        assert!(end_checkpoint.dropoff_cargo.remove(cargo));
+
+        // Modify the weights and sizes
+        let checkpoints = out.truck_checkpoints.get_mut(truck).unwrap();
+        for checkpoint in &mut checkpoints[start_checkpoint_index..end_checkpoint_index] {
+            let booking_info = self.cargo_booking_info.get(&cargo).unwrap();
+            // Immediately fail if weight constraint is failed
+            checkpoint.available_weight_kg += booking_info.weight_kg;
+            checkpoint.available_teu += booking_info.teu;
+        }
+
+        out.scheduled_cargo_truck.remove(cargo);
 
         Some(out)
     }
@@ -803,6 +889,17 @@ impl ScheduleGenerator {
             .windows(2)
             .all(|checkpoints| checkpoints[0].time < checkpoints[1].time));
 
+        // Try to modify the weights and sizes
+        let checkpoints = out.truck_checkpoints.get_mut(truck).unwrap();
+        for checkpoint in &mut checkpoints[start_checkpoint_index..end_checkpoint_index] {
+            let booking_info = self.cargo_booking_info.get(&chosen_cargo).unwrap();
+            // Immediately fail if weight constraint is failed
+            checkpoint
+                .available_weight_kg
+                .checked_sub(booking_info.weight_kg)?;
+            checkpoint.available_teu.checked_sub(booking_info.teu)?;
+        }
+
         out.scheduled_cargo_truck.insert(chosen_cargo, *truck);
 
         return Some(out);
@@ -828,9 +925,9 @@ impl ScheduleGenerator {
     /// terminal_data is a dict sending a terminal id to (opening_time, closing_time)
     /// truck_data is a dict sending truck id to starting_terminal
     pub fn new(
-        terminal_data: HashMap<TerminalID, (Time, Time)>,
-        truck_data: HashMap<TruckID, TerminalID>,
-        booking_data: Vec<Booking>,
+        terminal_data: HashMap<PyTerminalID, (Time, Time)>,
+        truck_data: HashMap<PyTruckID, PyTruckData>,
+        booking_data: Vec<PyBooking>,
         planning_period: (Time, Time),
     ) -> PyResult<Self> {
         // We want to map between the internally-used
@@ -860,25 +957,15 @@ impl ScheduleGenerator {
         }
 
         let mut trucks = BTreeSet::new();
-        let mut truck_starting_data = HashMap::new();
 
         let mut terminals = BTreeSet::new();
 
-        for (truck_id, starting_terminal_id) in truck_data.into_iter() {
-            let truck = Truck(truck_mapper.add_or_find(&truck_id));
+        for (truck_id, truck_data) in truck_data.iter() {
+            let starting_terminal_id = &truck_data.starting_terminal;
+            let truck = Truck(truck_mapper.add_or_find(truck_id));
             let starting_terminal = Terminal(terminal_mapper.add_or_find(&starting_terminal_id));
 
             trucks.insert(truck);
-            // TODO: in the future, find the time when a driver can start working
-            // in some other way
-            let start_time = terminal_open_intervals
-                .get(&starting_terminal)
-                .unwrap()
-                .get_intervals()
-                .first()
-                .unwrap()
-                .get_start_time();
-            truck_starting_data.insert(truck, (start_time, starting_terminal));
             terminals.insert(starting_terminal);
         }
 
@@ -947,6 +1034,8 @@ impl ScheduleGenerator {
             let booking_info = BookingInformation {
                 from: from_terminal,
                 to: to_terminal,
+                weight_kg: booking.cargo_weight_kg,
+                teu: booking.cargo_teu,
             };
             cargo_by_terminals
                 .entry((booking_info.from, booking_info.to))
@@ -954,6 +1043,36 @@ impl ScheduleGenerator {
                 .insert(cargo);
             cargo_booking_info.insert(cargo, booking_info);
         }
+
+        let truck_data = truck_data
+            .iter()
+            .map(|(truck, data)| {
+                let truck = Truck(truck_mapper.reverse_map(truck).unwrap());
+                let starting_terminal = Terminal(
+                    terminal_mapper
+                        .reverse_map(&data.starting_terminal)
+                        .unwrap(),
+                );
+
+                // TODO: in the future, find the time when a driver can start working
+                // in some other way
+                let start_time = terminal_open_intervals
+                    .get(&starting_terminal)
+                    .unwrap()
+                    .get_intervals()
+                    .first()
+                    .unwrap()
+                    .get_start_time();
+
+                let data = TruckData {
+                    starting_terminal,
+                    start_time,
+                    max_teu: data.max_teu,
+                    max_weight_kg: data.max_weight_kg,
+                };
+                (truck, data)
+            })
+            .collect();
 
         Ok(Self {
             driving_times_cache: DrivingTimesCache::new(),
@@ -963,7 +1082,7 @@ impl ScheduleGenerator {
             cargo_booking_info,
             terminals,
             trucks,
-            truck_starting_data,
+            truck_data,
             planning_period,
             rng: Xoshiro256PlusPlus::seed_from_u64(0),
             terminal_mapper,
@@ -1022,7 +1141,7 @@ impl ScheduleGenerator {
     }
 
     /// Returns a score representing how good the Schedule is
-    /// The score is a vector of numbers in interval [0, 1] and each
+    /// The score is a vector of numbers, where each
     /// represent a different criterion by which the solution can be judged.
     /// Higher score is better
     pub fn scores(&mut self, schedule: &Schedule) -> Vec<f64> {
@@ -1058,7 +1177,8 @@ impl ScheduleGenerator {
         // Proportion of trucks that are free
         let free_trucks_proportion = (num_free_trucks as f64) / (self.trucks.len() as f64);
 
-        // The smaller the total driving time, the closer this is to 1
+        // The smaller the total driving time, the larger this is
+        // This can become more than 1 if 2 pieces of cargo are moved at once
         // Prevent division by 0
         let driving_time_score = (min_driving_time as f64) / (max(total_driving_time, 1) as f64);
 
@@ -1069,7 +1189,7 @@ impl ScheduleGenerator {
         ]
     }
 
-    pub fn get_terminal_ids(&self) -> Vec<TerminalID> {
+    pub fn get_terminal_ids(&self) -> Vec<PyTerminalID> {
         self.terminals
             .iter()
             .map(|terminal| self.terminal_mapper.map(terminal.0).unwrap())
@@ -1082,8 +1202,8 @@ impl ScheduleGenerator {
     /// the terminals (including itself), in the order given in `terminal_id_order`
     pub fn set_driving_times(
         &mut self,
-        terminal_id_order: Vec<TerminalID>,
-        driving_times: HashMap<TerminalID, Vec<i64>>,
+        terminal_id_order: Vec<PyTerminalID>,
+        driving_times: HashMap<PyTerminalID, Vec<i64>>,
     ) {
         let mut driving_times_reformatted = HashMap::new();
         for (from_id, times) in driving_times.iter() {

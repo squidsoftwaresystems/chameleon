@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from chameleon_rust import Booking, Schedule, ScheduleGenerator
+from chameleon_rust import PyBooking, PyTruckData, Schedule, ScheduleGenerator
 from src.api import SquidAPI
 
 # TODO: collapse 2 consecutive empty transports into 1
@@ -78,14 +78,22 @@ def make_schedule_generator(
         for terminal, row in terminal_data.iterrows()
     }
 
-    _truck_data: Dict[TruckID, TerminalID] = {
-        cast(str, truck): row["starting_terminal"]
+    _truck_data: Dict[TruckID, PyTruckData] = {
+        cast(str, truck): PyTruckData(
+            row["starting_terminal"],
+            # TODO: is loading_capacity how much cargo we can take or truck + cargo?
+            row["loading_capacity"],
+            # TODO: set the correct value
+            40,
+        )
         for truck, row in truck_data.iterrows()
     }
 
-    _transpost_data: List[Booking] = [
-        Booking(
+    _transpost_data: List[PyBooking] = [
+        PyBooking(
             cargo=row["cargo"],
+            cargo_weight_kg=int(row["cargo_weight_kg"]),
+            cargo_teu=int(row["cargo_teu"]),
             from_terminal=row["from_terminal"],
             to_terminal=row["to_terminal"],
             pickup_open_time=timestamp_to_seconds(row["pickup_open_time"]),
@@ -219,12 +227,21 @@ def __make_schedule_data_from_api(
         # We will have issues if we are asked to deliver from a location to itself
         assert routes.shape[0] > 1
 
+        # TODO: what do we do if there are multiple transports?
+        # e.g. how to get cargo weight?
+        transports = api.getTransportsForBooking(booking_id)
+        assert transports.shape[0] > 0
+        weight = transports.iloc[0]["container_weight"]
+
         if pd.isna(booking["container_id"]):
             continue
 
         bookings.append(
             {
                 "transport_id": booking_id,
+                "cargo_weight_kg": weight,
+                # TODO: how do we get this value?
+                "cargo_teu": 20,
                 "cargo": booking["container_id"],
                 "pickup_open_time": booking["first_pickup"],
                 "pickup_close_time": booking["last_pickup"],

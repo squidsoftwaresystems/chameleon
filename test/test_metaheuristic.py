@@ -46,7 +46,10 @@ def create_schedule_data():
     )
 
     trucks = pd.DataFrame(
-        {"starting_terminal": to_str([0, 0, 0, 1, 1, 2])},
+        {
+            "starting_terminal": to_str([0, 0, 0, 1, 1, 2]),
+            "loading_capacity": [3, 8, 3, 3, 3, 3],
+        },
         index=to_str(range(6)),
     )
 
@@ -54,6 +57,8 @@ def create_schedule_data():
     transports = pd.DataFrame(
         {
             "cargo": to_str(range(6)),
+            "cargo_weight_kg":            [2,  4,  2,  2,   2,   3],
+            "cargo_teu":                 [20, 20, 40, 20,  40,  20],
             "from_terminal":       to_str([0,  0,  1,  1,   2,   2]),
             "to_terminal":         to_str([1,  2,  0,  2,   0,   1]),
             "pickup_open_time":   to_time([6, 10, 10, 15,   8,  15]),
@@ -124,14 +129,20 @@ def test_loading_api_data():
         schedule = schedule_generator.get_schedule_neighbour(schedule, 100)
 
 
-def test_simulated_annealing():
+def test_simulated_annealing(print_score=True, print_schedule=False):
     """Tests that simulated annealing works without errors"""
     for i in range(20):
         data = create_schedule_data()
-        run_sa_with_seed(data, i, num_iterations=10000)
+        run_sa_with_seed(
+            data,
+            i,
+            num_iterations=10000,
+            print_score=print_score,
+            print_schedule=print_schedule,
+        )
 
 
-def test_simulated_annealing_on_api():
+def test_simulated_annealing_on_api(print_score=True, print_schedule=False):
     """Tests that simulated annealing works without errors"""
     planning_period = (
         pd.Timestamp("2025-03-24T00"),
@@ -139,4 +150,10 @@ def test_simulated_annealing_on_api():
     )
     for i in range(20):
         data = cached_make_schedule_data_from_api(API(), planning_period)
-        run_sa_with_seed(data, i, num_iterations=30000)
+        run_sa_with_seed(
+            data,
+            i,
+            num_iterations=30000,
+            print_score=print_score,
+            print_schedule=print_schedule,
+        )
