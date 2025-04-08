@@ -17,7 +17,8 @@ class SquidAPI:
 
     def __init__(self, day: Optional[date] = None):
         # Initialize API credentials and endpoints
-        self.__API_KEY = os.getenv("API-KEY")
+        self.__API_KEY = "2d15836683458d6af4204613c8633d8ffa4747cfefff22414b4df5d9a33d23612abed80c5e7d82c36372b88189ec20d77b5baaedb0460750f128bfff0b0a2769e658939fadfb51c1a967ac15ffcbd85fd00e5559cb46cb704e7dd82881ed4450f062112edaf9fbc091b98a8b84093e7920251b05ac464950223360dac8bb2fe13448500347ca0f6e"
+
         if self.__API_KEY is None:
             raise ValueError("API-KEY not found in environment variables")
 
@@ -805,7 +806,7 @@ class SquidAPI:
             loc = self.getLocation(code)
             if loc is None:
                 return None
-            coords.append([loc.longitude, loc.latitude])
+            coords.append([float(loc.longitude), float(loc.latitude)])
 
         return self.getCoordDist(coords)
 

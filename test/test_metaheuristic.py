@@ -87,7 +87,7 @@ def test_get_neighbours():
 
 
 def run_sa_with_seed(
-    data, seed, num_iterations, print_score=True, print_schedule=False
+    data, seed, num_iterations, print_score=False, print_schedule=False
 ):
     schedule_generator = make_schedule_generator(*data)
     schedule_generator.seed(seed)
@@ -105,6 +105,7 @@ def run_sa_with_seed(
     if print_schedule:
         print(best_schedule.repr(schedule_generator))
 
+    return best_schedule
     # TODO: think of a way to test that its output has not
     # significantly degraded
 
@@ -140,3 +141,12 @@ def test_simulated_annealing_on_api():
     for i in range(20):
         data = cached_make_schedule_data_from_api(API(), planning_period)
         run_sa_with_seed(data, i, num_iterations=30000)
+
+def run_simulated_annealing_on_api(seed):
+    planning_period = (
+        pd.Timestamp("2025-03-24T00"),
+        pd.Timestamp("2025-03-25T00"),
+    )
+    data = cached_make_schedule_data_from_api(API(), planning_period)
+    schedule_generator = make_schedule_generator(*data)
+    return run_sa_with_seed(data, seed, num_iterations=30000).to_list_of_tuples(schedule_generator)
