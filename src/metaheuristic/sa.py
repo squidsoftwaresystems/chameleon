@@ -1,92 +1,135 @@
-import math
 import random
 import sys
+from math import exp, log
+
+import numpy.typing as npt
 
 from chameleon_rust import Schedule, ScheduleGenerator
+from src.metaheuristic.schedule import get_scores_calculator
 
 
-class RunningAverage:
-    N: int
-    avg: float
+def __deltas_to_probability(deltas: npt.NDArray, temperature: float) -> float:
+    (deliveries_delta, free_trucks_delta, driving_time_delta) = deltas
 
-    def __init__(self):
-        self.N = 0
-        self.avg = 0
+    # We are mainly optimising for delivered cargo,
+    # so encourage the switch
+    combined_delta = 3 * deliveries_delta
 
-    def update(self, new_value: float):
-        self.avg = self.N / (self.N + 1) * self.avg + new_value / (self.N + 1)
-        self.N += 1
+    # Only include free_trucks_delta if we aren't doing worse
+    # for deliveries - we don't want to encourage less deliveries with
+    # more free trucks
+    if deliveries_delta >= 0:
+        combined_delta += 0.05 * free_trucks_delta
 
-    def get_avg(self) -> float:
-        return self.avg
+    # Minimising truck time is secondary to maximising number of deliveries
+    if deliveries_delta <= 0:
+        combined_delta += driving_time_delta
+
+    try:
+        return exp(combined_delta / temperature)
+    except OverflowError:
+        return sys.float_info.max
+
+
+def __is_better(deltas: npt.NDArray) -> bool:
+    """
+    Is `schedule1` better than `schedule2`, where
+    `deltas` = `schedule1_score - schedule2_score`
+    """
+    (deliveries_delta, free_trucks_delta, driving_time_delta) = deltas
+    if deliveries_delta > 0:
+        return True
+    elif deliveries_delta == 0 and driving_time_delta > 0:
+        return True
+    else:
+        return (
+            3 * deliveries_delta + 0.5 * free_trucks_delta + driving_time_delta
+            > 0
+        )
 
 
 def sa_solve(
     initial_solution: Schedule,
     schedule_generator: ScheduleGenerator,
+    num_iterations: int,
     initial_temperature: float = 10.0,
-    final_temperature: float = 1e-3,
-    alpha: float = 0.99,
-    max_iterations: int = 10000,
-    num_tries: int = 100,
+    final_temperature: float = 1e-1,
+    num_tries_per_action: int = 10,
+    restart_probability=0.001,
+    seed=0,
 ) -> Schedule:
     """
     This simulated annealing algorithm optimises a given objective function
 
-    @param the function to maximise.
     @param initial_solution initial guess for the solution
     @param schedule_generator algorithm for generating neighbouring schedules
-    @param starting 'temperature' for the annealing process
-    @param final 'temperature' for the annealing process
-    @param 'cooling rate' (0<alpha<1). Temperature is multiplied by alpha each iteration
-    @param maximum number of iterations to perform before terminating
+    @param num_iterations number of iterations to perform before terminating
+    @param initial_temperature starting 'temperature' for the annealing process
+    @param final_temperature final 'temperature' for the annealing process
+    @param num_tries_per_action a parameter for generation of neighbours
+    @param restart_probability probability of going back to a best_solution
+    @param seed: seed for the rng
 
-    @returns a schedule
+    @returns a schedule and its score
     """
-    current_solution: Schedule = initial_solution
-    current_score: float = initial_solution.score()
+    random.seed(seed)
 
-    average_delta_magnitude = RunningAverage()
+    get_scores = get_scores_calculator(schedule_generator)
+
+    current_solution: Schedule = initial_solution
+    current_scores: npt.NDArray = get_scores(current_solution)
 
     best_solution = current_solution
-    best_score = current_score
+    best_scores = current_scores
 
     temperature = initial_temperature
 
     iteration = 0
 
-    while temperature > final_temperature and iteration < max_iterations:
+    while temperature > final_temperature and iteration < num_iterations:
+        # Allow randomly restarting to best known state
+        if random.random() <= restart_probability:
+            current_solution = best_solution
+            current_scores = best_scores
+
         new_solution = schedule_generator.get_schedule_neighbour(
-            current_solution, num_tries
+            current_solution, num_tries_per_action
         )  # generate a new candidate solution
 
-        new_score = new_solution.score()
+        new_scores = get_scores(new_solution)
 
-        delta = new_score - current_score  # calculate 'energy difference'
-
-        average_delta_magnitude.update(abs(delta))
+        deltas: npt.NDArray = (
+            new_scores - current_scores
+        )  # calculate 'energy difference'
 
         # decide whether to accept the new solution
-        if delta > 0:  # if new solution is better, always accept
+        if __is_better(deltas):  # if new solution is better, always accept
             current_solution = new_solution
-            current_score = new_score
+            current_scores = new_scores
         else:  # accept with a probability depending on the temperature
-            try:
-                # use the average score to put the current score into context
-                ratio = new_score / average_delta_magnitude.get_avg()
-                acceptance_probability = math.exp(-ratio / temperature)
-            except OverflowError:
-                acceptance_probability = sys.float_info.max
+            acceptance_probability = __deltas_to_probability(
+                deltas, temperature
+            )
             if random.random() < acceptance_probability:
                 current_solution = new_solution
-                current_score = new_score
+                current_scores = new_scores
 
-        if current_score > best_score:  # track the best solution found
+        if __is_better(
+            new_scores - best_scores
+        ):  # track the best solution found
             best_solution = current_solution
-            best_score = current_score
+            best_scores = current_scores
 
         # 'cool down'
-        temperature *= alpha
+        # We make temperature change at an exponential rate
+        # between initial_temperature and final_temperature
+        # We do this by linearly interpolating between log of both,
+        # and then taking exp.
         iteration += 1
+        progress = float(iteration) / float(num_iterations)
+        temperature = exp(
+            progress * log(final_temperature)
+            + (1 - progress) * log(initial_temperature)
+        )
 
-    return best_solution, best_score
+    return best_solution, best_scores
