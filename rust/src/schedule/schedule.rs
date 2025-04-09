@@ -13,13 +13,13 @@ type PyTruckID = String;
 
 // NOTE: this prevents recognising them as the same type, and e.g.
 // assigning a truck to a cargo by mistake
-#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug)]
 pub struct Terminal(usize);
 
-#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug)]
 pub struct Cargo(usize);
 
-#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug)]
 pub struct Truck(usize);
 
 #[pyclass]
@@ -540,16 +540,39 @@ impl ScheduleGenerator {
         let (prev_terminal, next_terminal) =
             self.get_gap_terminals(truck, prev_checkpoint, next_checkpoint);
 
-        // TODO: pick a time and a terminal based on whether we can pick up or drop off cargo at the time
-        // For now, we just picked at random and stick with it
+        // NOTE: the optimal solution doesn't visit a terminal and do nothing at it.
+        // Each visited terminal should either have a pickup or a dropoff
+        // associated with it
+        // TODO: explore automatically adding that pickup/dropoff
+        let mut possible_terminals = BTreeSet::new();
 
-        // disallow picking same terminal as the one before or after, since we want to associate
-        // gaps between checkpoints with driving
-        let new_terminal = *self
-            .terminals
-            .iter()
-            .filter(|terminal| **terminal != prev_terminal && Some(**terminal) != next_terminal)
-            .choose(&mut self.rng)?;
+        for (cargo, booking_info) in self.cargo_booking_info.iter() {
+            if schedule.scheduled_cargo_truck.contains_key(cargo) {
+                continue;
+            }
+            // disallow picking same terminal as the one before or after, since we want to associate
+            // gaps between checkpoints with driving
+            if booking_info.from != prev_terminal && Some(booking_info.from) != next_terminal {
+                possible_terminals.insert(booking_info.from);
+            }
+            if booking_info.to != prev_terminal && Some(booking_info.to) != next_terminal {
+                // Only schedule the `to` terminal if this truck has visited the
+                // `from` terminal before and so can deliver
+                if let Some(first_from_checkpoint) = schedule
+                    .truck_checkpoints
+                    .get(&truck)
+                    .unwrap()
+                    .iter()
+                    .find(|checkpoint| checkpoint.terminal == booking_info.from)
+                {
+                    if first_from_checkpoint.time < time_to_identify_gap {
+                        possible_terminals.insert(booking_info.to);
+                    }
+                };
+            }
+        }
+
+        let new_terminal = *possible_terminals.iter().choose(&mut self.rng)?;
 
         let allowed_time_interval = self.get_driving_time_constraints(
             truck,

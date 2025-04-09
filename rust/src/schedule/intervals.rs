@@ -12,7 +12,7 @@ pub type TimeDelta = i64;
 pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord)]
 /// A non-empty interval of time
 pub struct IntervalWithData<T>
 where
