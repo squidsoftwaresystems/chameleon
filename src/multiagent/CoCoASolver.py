@@ -1,5 +1,5 @@
 import random
-from Graph import *
+from src.multiagent import Graph
 
 
 ## -------------------------------------------------------------------

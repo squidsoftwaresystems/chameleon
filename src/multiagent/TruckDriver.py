@@ -1,7 +1,7 @@
 from enum import Enum
 from dataclasses import dataclass
 
-from Container import *
+from src.multiagent import Container
 
 ## -------------------------------------------------------------------
 

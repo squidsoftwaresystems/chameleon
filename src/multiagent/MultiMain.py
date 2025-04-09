@@ -1,9 +1,8 @@
 from typing import List, Dict, Tuple, Set, Optional
-from Graph import *
-from CoCoASolver import *
+from src.multiagent import Graph
+from src.multiagent import CoCoASolver
 import pandas as pd
-import os
-from api import SquidAPI as api
+from src.api import SquidAPI
 
 #df = pd.read_csv('bookings.csv')
 #print(df.to_string())
@@ -19,6 +18,7 @@ class Location:
         return f"Location({self.city}, {self.country}, {self.opening_time}, {self.closing_time})"
 
 def get_API_data():
+  api = SquidAPI
 
   # LOCATIONS
   # Get location data
@@ -30,16 +30,16 @@ def get_API_data():
     "Hamburg": Location("Hamburg", "Germany", 7, 20),
     "Cologne": Location("Cologne", "Germany", 8, 18)
   }"""
-  locationsDF = pd.read_csv('locations.csv')
+  locationsDF = api.getLocations()
   locations = {
-      row['code']: Location(row['code'], row['country'], row['open_from'], row['open_to']) #assuming code and country, can change
+      row['code']: Location(row['code'], row['country'], row['open_from'], row['open_to']) 
       for idx, row in locationsDF.iterrows()
   }
 
   # TRUCKDRIVERS
   # Get truck and driver data and merge csv files
-  trucksDF = pd.read_csv('trucks.csv')
-  driversDF = pd.read_csv('drivers.csv')
+  trucksDF = api.GetTrucks()
+  driversDF = api.GetDrivers()
   truckDriversDF = pd.merge(trucksDF, driversDF, on='truck_id')
   # Select relevant columns
   truckdrivers = truckDriversDF[['truck_id', 'driver_id', 'truck_adr', 'driver_adr', 'truck_lzv', 'driver_lzv', 'loading_capacity', 'sleeping_cabin', 'obu_belgium', 'obu_germany']].values
@@ -53,9 +53,9 @@ def get_API_data():
 
   # CONTAINERS
   # Get container data
-  bookingsDF = pd.read_csv('bookings.csv')
-  transportsDF = pd.read_csv('transports.csv')
-  routesDF = pd.read_csv('routes.csv')
+  bookingsDF = api.getBookings()
+  transportsDF = api.getTransports()
+  routesDF = api.getRoutes()
   transportsRoutesDF = pd.merge(transportsDF, routesDF, on='transport_id')
   containersDF = pd.merge(transportsRoutesDF, bookingsDF, on='container_id')
   #containersDF = pd.merge(containersDF, locationsDF, how='left', left_on='delivery_location_id', right_on='id')

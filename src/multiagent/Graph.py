@@ -1,5 +1,5 @@
-from Container import *
-from TruckDriver import *
+from src.multiagent import Container
+from src.multiagent import TruckDriver
 
 
 ## -------------------------------------------------------------------
