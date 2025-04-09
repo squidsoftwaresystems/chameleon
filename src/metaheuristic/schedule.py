@@ -1,5 +1,6 @@
 import os
 import pickle
+import warnings
 from typing import Callable, Dict, List, Tuple, cast
 
 import numpy as np
@@ -281,7 +282,8 @@ def invalidate_schedule_data_cache(
 def cached_make_schedule_data_from_api(
     api: SquidAPI,
     planning_period: Tuple[pd.Timestamp, pd.Timestamp],
-    pkl_filepath: str = "data/schedule_data.pkl",
+    schedule_pkl_filepath: str = "data/schedule_data.pkl",
+    driving_times_pkl_filepath: str = "data/driving_times_data.pkl",
 ) -> Tuple[
     pd.DataFrame,
     pd.DataFrame,
@@ -295,41 +297,62 @@ def cached_make_schedule_data_from_api(
     return a schedule generator based on that
     """
 
-    def get_driving_times(terminal_ids):
-        matrix = api.getLocatonIdMatrix(terminal_ids)
+    def cached_get_driving_times(
+        terminal_ids: List[TerminalID],
+    ) -> Dict[TerminalID, List[pd.Timedelta]]:
+        """
+        Gets driving times if needed, or caches them otherwise
+        """
 
-        out = {}
+        def refetch():
+            matrix = api.getLocatonIdMatrix(terminal_ids)
 
-        # Convert them to timedeltas
-        for i, from_id in enumerate(terminal_ids):
-            row = []
-            for j in range(len(terminal_ids)):
-                row.append(
-                    pd.to_timedelta(matrix["durations"][i][j], unit="s")
-                )
-            out[from_id] = row
+            out = {}
 
-        return out
+            warnings.warn("Refetching driving times")
+
+            # Convert them to timedeltas
+            for i, from_id in enumerate(terminal_ids):
+                row = []
+                for j in range(len(terminal_ids)):
+                    row.append(
+                        pd.to_timedelta(matrix["durations"][i][j], unit="s")
+                    )
+                out[from_id] = row
+
+            with open(driving_times_pkl_filepath, "wb") as f:
+                pickle.dump((terminal_ids, out), f, pickle.HIGHEST_PROTOCOL)
+            return out
+
+        try:
+            with open(driving_times_pkl_filepath, "rb") as f:
+                (old_terminal_ids, data) = pickle.load(f)
+                if old_terminal_ids != terminal_ids:
+                    data = refetch()
+        except OSError:
+            data = refetch()
+
+        return data
 
     def refetch():
         # Could not load data, need to re-compute and cache
         data = __make_schedule_data_from_api(api, planning_period)
-        with open(pkl_filepath, "wb") as f:
+        with open(schedule_pkl_filepath, "wb") as f:
             pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
         return data
 
     try:
-        with open(pkl_filepath, "rb") as f:
+        with open(schedule_pkl_filepath, "rb") as f:
             data = pickle.load(f)
 
         # Check if the planning period is the same
         if data[3] != planning_period:
-            invalidate_schedule_data_cache(pkl_filepath)
+            invalidate_schedule_data_cache(schedule_pkl_filepath)
             data = refetch()
     except OSError:
         data = refetch()
 
-    return (*data, get_driving_times)
+    return (*data, cached_get_driving_times)
 
 
 def get_scores_calculator(

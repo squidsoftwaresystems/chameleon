@@ -1,9 +1,7 @@
-import math
 import random
 import sys
 from math import exp, log
 
-import numpy as np
 import numpy.typing as npt
 
 from chameleon_rust import Schedule, ScheduleGenerator
@@ -28,7 +26,7 @@ def __deltas_to_probability(deltas: npt.NDArray, temperature: float) -> float:
         combined_delta += driving_time_delta
 
     try:
-        return math.exp(combined_delta / temperature)
+        return exp(combined_delta / temperature)
     except OverflowError:
         return sys.float_info.max
 
@@ -75,6 +73,7 @@ def sa_solve(
     @returns a schedule and its score
     """
     random.seed(seed)
+
     get_scores = get_scores_calculator(schedule_generator)
 
     current_solution: Schedule = initial_solution

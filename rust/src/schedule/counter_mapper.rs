@@ -1,19 +1,20 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::BTreeMap;
 
 /// A struct that bijectively maps from internal `usize` ids
 /// to external ids of type `T`
-pub struct CounterMapper<T: Clone + Hash + Eq> {
+#[derive(PartialEq, Eq)]
+pub struct CounterMapper<T: Clone + Ord + Eq> {
     counter: usize,
-    map: HashMap<usize, T>,
-    reverse_map: HashMap<T, usize>,
+    map: BTreeMap<usize, T>,
+    reverse_map: BTreeMap<T, usize>,
 }
 
-impl<T: Clone + Hash + Eq> CounterMapper<T> {
+impl<T: Clone + Ord + Eq> CounterMapper<T> {
     pub fn new() -> Self {
         Self {
             counter: 0,
-            map: HashMap::new(),
-            reverse_map: HashMap::new(),
+            map: BTreeMap::new(),
+            reverse_map: BTreeMap::new(),
         }
     }
 

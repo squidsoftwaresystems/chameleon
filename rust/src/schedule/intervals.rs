@@ -87,7 +87,7 @@ impl<T: Clone + Eq> IntervalWithData<T> {
 }
 
 /// A list of non-overlapping intervals in an increasing order
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntervalWithDataChain<T>
 where
     T: Eq,
