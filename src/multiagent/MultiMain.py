@@ -18,7 +18,7 @@ class Location:
         return f"Location({self.city}, {self.country}, {self.opening_time}, {self.closing_time})"
 
 def get_API_data():
-  api = SquidAPI
+  api = SquidAPI()
 
   # LOCATIONS
   # Get location data
@@ -38,9 +38,17 @@ def get_API_data():
 
   # TRUCKDRIVERS
   # Get truck and driver data and merge csv files
-  trucksDF = api.GetTrucks()
-  driversDF = api.GetDrivers()
-  truckDriversDF = pd.merge(trucksDF, driversDF, on='truck_id')
+  #driversDF = pd.read_csv("./data/drivers.csv")
+
+  trucksDF = api.getTrucks()
+  print("TRUCKS::")
+  print(list(trucksDF))
+  driversDF = api.getDrivers()
+  print("DRIVERS::")
+  print(list(driversDF))
+  truckDriversDF = pd.merge(trucksDF, driversDF, left_on='id', right_on='truck_id').set_index('truck_id')
+  print("MERGED::")
+  print(list(truckDriversDF)
   # Select relevant columns
   truckdrivers = truckDriversDF[['truck_id', 'driver_id', 'truck_adr', 'driver_adr', 'truck_lzv', 'driver_lzv', 'loading_capacity', 'sleeping_cabin', 'obu_belgium', 'obu_germany']].values
   truckdrivers = truckdrivers.tolist()
