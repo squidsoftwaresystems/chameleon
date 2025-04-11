@@ -1,31 +1,23 @@
 from src.multiagent import Graph
 from src.multiagent import CoCoASolver
+from src.multiagent import Location
 import pandas as pd
 from src.api import SquidAPI
+from datetime import datetime
+import sys
 
 
 ## -------------------------------------------------------------------
-
-
-class Location:
-    def __init__(self, city, country, opening_time, closing_time):
-        self.city= city
-        self.country = country
-        self.opening_time = opening_time
-        self.closing_time = closing_time
-        
-    def __repr__(self):
-        return f"Location({self.city}, {self.country}, {self.opening_time}, {self.closing_time})"
-
 
 def get_API_data():
   api = SquidAPI()
 
   # LOCATIONS
+  print("Collating locations...")
   # Get location data
   locationsDF = api.getLocations().reset_index().set_index('id', drop=False).rename(columns={'id': 'location_id'})
   locations = {
-      row['code']: Location(row['code'], row['country'], row['open_from'], row['open_to']) #i created a class called Location (above) to match the requested output format, you can change this to just be a tuple/array
+      row['code']: Location(row['name'], row['country'], row['open_from'], row['open_to']) 
       for idx, row in locationsDF.iterrows()
   }
 
@@ -39,6 +31,7 @@ def get_API_data():
   }"""
 
   # TRUCKDRIVERS
+  print("Collating trucks...")
   # Merge data
   trucksDF = api.getTrucks().reset_index().set_index('id', drop=False).rename(columns={'id': 'truck_id'})
   driversDF = api.getDrivers().reset_index().set_index('id', drop=False).rename(columns={'id': 'driver_id'})
@@ -56,6 +49,7 @@ def get_API_data():
   # [[t_id, d_id, t_adr, d_adr, t_lzv, d_lzv, capacity, sleeping cabin, OBU, preferences, rest periods]]
   
   # CONTAINERS
+  print("Collating containers...")
   # Merge data
   bookingsDF = api.getBookings().reset_index().set_index('id').rename(columns={'id': 'booking_id'})
   transportsDF = api.getTransports().reset_index().set_index('id', drop=False).rename(columns={'id': 'transport_id'})
@@ -77,26 +71,67 @@ def get_API_data():
     if pd.isna(row['container_id']):
       continue
 
+    # STRING TO DATETIME CONVERSIONS, (+ weeding out rows without delivery dates)
+
+    #delivery_datetime (str) to days until delivery (int)
+    if not pd.isna(row['delivery_datetime']):
+      currentDT = datetime(2025, 3, 28, 0, 0) #a hard coded date/time
+      deliveryDT = datetime.strptime(row['delivery_datetime'], '%Y-%m-%dT%H:%M:%S.000Z')
+      daysUntilDelivery = (deliveryDT-currentDT).days
+    else:
+      daysUntilDelivery = sys.maxsize #default value - can be changed
+    
+    #first_pickup (str) to first_pickupDays
+    if not pd.isna(row['first_pickup']):
+      first_pickupDT = int(datetime.strptime(row['first_pickup'], '%Y-%m-%dT%H:%M:%S.000Z').timestamp()/86400)
+    else:
+      first_pickupDT = 0 #default value - can be changed
+
+    #last_pickup (str) to last_pickupDT (datetime)
+    if not pd.isna(row['last_pickup']):
+      last_pickupDT = int(datetime.strptime(row['last_pickup'], '%Y-%m-%dT%H:%M:%S.000Z').timestamp()/86400)
+    else:
+      last_pickupDT = sys.maxsize #default value - can be changed
+
+    #cargo_opening (str) to cargo_openingDT (datetime)
+    if not pd.isna(row['cargo_opening']):
+      cargo_openingDT = int(datetime.strptime(row['cargo_opening'], '%Y-%m-%dT%H:%M:%S.000Z').timestamp()/86400)
+    else:
+      cargo_openingDT = 0 #default value - can be changed
+
+    #cargo_closing (str) to cargo_closingDT (datetime)
+    if not pd.isna(row['cargo_closing']):
+      cargo_closingDT = int(datetime.strptime(row['cargo_closing'], '%Y-%m-%dT%H:%M:%S.000Z').timestamp()/86400)
+    else:
+      cargo_closingDT = sys.maxsize #default value - can be changed
+
+    #Create list of countries on route
+    if not routesWithLocs.iloc[-1]['country'] == routesWithLocs.iloc[0]['country']:
+      countries = [routesWithLocs.iloc[-1]['country'], routesWithLocs.iloc[0]['country']]
+    else:
+      countries = [routesWithLocs.iloc[0]['country']]
+
     containers.append(
       [
          row['container_id'], #'container_id':
          row['container_type'], #'container_type': 
          row['adr'], #'adr': 
          row['container_weight'], #'container_weight': 
-         row['first_pickup'], #'first_pickup': 
-         row['last_pickup'], #'last_pickup': 
-         row['delivery_datetime'], #'delivery_datetime': 
-         row['cargo_opening'], #'cargo_opening': 
-         row['cargo_closing'], #'cargo_closing': 
+         first_pickupDT, #'first_pickup': (int)
+         last_pickupDT, #'last_pickup': (int)
+         daysUntilDelivery, #'delivery_datetime': (int days until delivery)
+         cargo_openingDT, #'cargo_opening': (int)
+         cargo_closingDT, #'cargo_closing': (int)
          routesWithLocs.iloc[-1]['location_id'], #'pickup_location': 
          row['delivery_location_id'], #'delivery_location_id': 
          routesWithLocs.iloc[0]['estimated_driving_duration'], #'journey_duration': (do we add the estimated service time?)
          routesWithLocs.iloc[0]['estimated_distance'], #'journey_distance': 
-         (routesWithLocs.iloc[-1]['country'], routesWithLocs.iloc[0]['country']), #'route_countries': (i provided this as a tuple with starting country and ending country)
-         pd.to_datetime(row['delivery_datetime']).day #'pickup_day': (i interpreted this as the day part of the datetime)
+         countries, #'route_countries':
+         pd.to_datetime(row['delivery_datetime']).day #'pickup_day': (i interpreted this as the day part of the datetime, should this be day of the week?)
       ]
     )
 
+  print("Done collating data!")
   # Final output should be:
   # [[c_id, c_type, c_adr, c_weight, first_pickup, last_pickup, delivery_datetime, cargo_opening, cargo_closing, pickup_location, delivery_location, journey_duration, journey_distance, route_countries, pickup_day]]
 

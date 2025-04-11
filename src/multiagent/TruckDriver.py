@@ -1,5 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass
+from datetime import datetime
 
 from src.multiagent import Container
 
@@ -238,10 +239,10 @@ class TruckDriver:
     days_until_due = c.delivery
     score += (max(0, 30 - days_until_due) * 10)
 
-    pickup_window_size = c.pickup[1] - c.pickup[0]
+    pickup_window_size = c.pickup[1] - c.pickup[0] #assuming pickup_window_size is counted in number of days
     score += pickup_window_size * 5
 
-    cargo_window_size = c.cargo[1] - c.cargo[0]
+    cargo_window_size = c.cargo[1] - c.cargo[0] #assuming cargo_window_size is counted in number of days
     score += cargo_window_size * 5
 
     score -= c.cargo[1]*5

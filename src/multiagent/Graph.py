@@ -32,7 +32,7 @@ class Graph:
       pickup_location = self.locations.get(pickup_loc_name) if pickup_loc_name else None
       delivery_location = self.locations.get(delivery_loc_name) if delivery_loc_name else None
 
-      containerObj = Container(c_id, c_type, c_adr, c_weight, first_pickup, last_pickup,
+      containerObj = Container.Container(c_id, c_type, c_adr, c_weight, first_pickup, last_pickup,
                               delivery_datetime, cargo_opening, cargo_closing, pickup_location, delivery_location, journey_duration, journey_distance, route_countries, pickup_day)
 
       container_objs.add(containerObj)
@@ -48,7 +48,7 @@ class Graph:
       has_obu = td[8] if len(td) > 8 else False
       driver_preferences = td[9] if len(td) > 9 else {}
 
-      tdObj = TruckDriver(t_id, d_id, t_adr, d_adr, t_lzv, d_lzv, loading_capacity,
+      tdObj = TruckDriver.TruckDriver(t_id, d_id, t_adr, d_adr, t_lzv, d_lzv, loading_capacity,
                           has_sleeping_cabin, has_obu, driver_preferences)
 
       # Add rest periods if provided

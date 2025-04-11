@@ -1,5 +1,6 @@
 import random
 from src.multiagent import Graph
+from src.multiagent.TruckDriver import State
 
 
 ## -------------------------------------------------------------------
