@@ -4,9 +4,6 @@ from src.multiagent import CoCoASolver
 import pandas as pd
 from src.api import SquidAPI
 
-#df = pd.read_csv('bookings.csv')
-#print(df.to_string())
-
 class Location:
     def __init__(self, city, country, opening_time, closing_time):
         self.city= city
@@ -22,6 +19,12 @@ def get_API_data():
 
   # LOCATIONS
   # Get location data
+  locationsDF = api.getLocations().reset_index().set_index('id', drop=False).rename(columns={'id': 'location_id'})
+  locations = {
+      row['code']: Location(row['code'], row['country'], row['open_from'], row['open_to']) #i created a class called Location (above) to match the requested output format, you can change this to just be a tuple/array
+      for idx, row in locationsDF.iterrows()
+  }
+
   # Final output should be:
   """locations = {
     "Rotterdam": Location("Rotterdam", "Netherlands", 8, 20),
@@ -30,46 +33,66 @@ def get_API_data():
     "Hamburg": Location("Hamburg", "Germany", 7, 20),
     "Cologne": Location("Cologne", "Germany", 8, 18)
   }"""
-  locationsDF = api.getLocations()
-  locations = {
-      row['code']: Location(row['code'], row['country'], row['open_from'], row['open_to']) 
-      for idx, row in locationsDF.iterrows()
-  }
 
   # TRUCKDRIVERS
-  # Get truck and driver data and merge csv files
-  #driversDF = pd.read_csv("./data/drivers.csv")
+  # Merge data
+  trucksDF = api.getTrucks().reset_index().set_index('id', drop=False).rename(columns={'id': 'truck_id'})
+  driversDF = api.getDrivers().reset_index().set_index('id', drop=False).rename(columns={'id': 'driver_id'})
+  truckDriversDF = pd.merge(trucksDF, driversDF, left_on='truck_id', right_on='truck_id')
 
-  trucksDF = api.getTrucks()
-  print("TRUCKS::")
-  print(list(trucksDF))
-  driversDF = api.getDrivers()
-  print("DRIVERS::")
-  print(list(driversDF))
-  truckDriversDF = pd.merge(trucksDF, driversDF, left_on='id', right_on='truck_id').set_index('truck_id')
-  print("MERGED::")
-  print(list(truckDriversDF)
   # Select relevant columns
   truckdrivers = truckDriversDF[['truck_id', 'driver_id', 'truck_adr', 'driver_adr', 'truck_lzv', 'driver_lzv', 'loading_capacity', 'sleeping_cabin', 'obu_belgium', 'obu_germany']].values
   truckdrivers = truckdrivers.tolist()
-  # Final output should be:
-  # [[t_id, d_id, t_adr, d_adr, t_lzv, d_lzv, capacity, sleeping cabin, OBU, preferences, rest periods]]
   for item in truckdrivers:
     item[8] = item[8] and item[9]
     item[9] = {}
     item.append([])
 
+  # Final output should be:
+  # [[t_id, d_id, t_adr, d_adr, t_lzv, d_lzv, capacity, sleeping cabin, OBU, preferences, rest periods]]
+  
   # CONTAINERS
-  # Get container data
-  bookingsDF = api.getBookings()
-  transportsDF = api.getTransports()
-  routesDF = api.getRoutes()
-  transportsRoutesDF = pd.merge(transportsDF, routesDF, on='transport_id')
-  containersDF = pd.merge(transportsRoutesDF, bookingsDF, on='container_id')
-  #containersDF = pd.merge(containersDF, locationsDF, how='left', left_on='delivery_location_id', right_on='id')
+  # Merge data
+  bookingsDF = api.getBookings().reset_index().set_index('id').rename(columns={'id': 'booking_id'})
+  transportsDF = api.getTransports().reset_index().set_index('id', drop=False).rename(columns={'id': 'transport_id'})
+  containersDF = pd.merge(bookingsDF, transportsDF, left_on='container_id', right_on='container_id')
+
   # Select relevant columns
-  containers = containersDF[['container_id', 'container_type', 'adr', 'container_weight', 'first_pickup', 'last_pickup', 'delivery_datetime', 'cargo_opening', 'cargo_closing', 'pickup_location', 'delivery_location_id', 'journey_duration', 'journey_distance', 'route_countries', 'pickup_day']].values
-  containers = containers.tolist()
+  containers = []
+  for id, row in containersDF.iterrows():
+    bookingID = row['booking_id']
+    routesDF = api.getRoutesForBooking(bookingID)
+    routesWithLocs = pd.merge(routesDF, locationsDF, left_on = 'location_id', right_on='location_id')
+
+    if routesWithLocs.empty:
+      continue
+
+    # We will have issues if we are asked to deliver from a location to itself
+    assert routesWithLocs.shape[0] > 1
+
+    if pd.isna(row['container_id']):
+      continue
+
+    containers.append(
+      [
+         row['container_id'], #'container_id':
+         row['container_type'], #'container_type': 
+         row['adr'], #'adr': 
+         row['container_weight'], #'container_weight': 
+         row['first_pickup'], #'first_pickup': 
+         row['last_pickup'], #'last_pickup': 
+         row['delivery_datetime'], #'delivery_datetime': 
+         row['cargo_opening'], #'cargo_opening': 
+         row['cargo_closing'], #'cargo_closing': 
+         routesWithLocs.iloc[-1]['location_id'], #'pickup_location': 
+         row['delivery_location_id'], #'delivery_location_id': 
+         routesWithLocs.iloc[0]['estimated_driving_duration'], #'journey_duration': (do we add the estimated service time?)
+         routesWithLocs.iloc[0]['estimated_distance'], #'journey_distance': 
+         (routesWithLocs.iloc[-1]['country'], routesWithLocs.iloc[0]['country']), #'route_countries': (i provided this as a tuple with starting country and ending country)
+         pd.to_datetime(row['delivery_datetime']).day #'pickup_day': (i interpreted this as the day part of the datetime)
+      ]
+    )
+
   # Final output should be:
   # [[c_id, c_type, c_adr, c_weight, first_pickup, last_pickup, delivery_datetime, cargo_opening, cargo_closing, pickup_location, delivery_location, journey_duration, journey_distance, route_countries, pickup_day]]
 
