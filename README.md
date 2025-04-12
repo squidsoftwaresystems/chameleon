@@ -31,6 +31,8 @@ Please use the tests by running `pytest` and check your python types by running 
 
 Running `pytest --pdb` also gives you access to the debugger
 
+If the module caches test data (such as `schedule.py` caching e.g. driving times and processed API data), then if you are changing the format of stored data, please remember to clear the cache by deleting `.pkl` files under `data/` to avoid issues with new code using cache with old format of data.
+
 ### Adding new packages
 1. Add it to `requirements.txt` by putting output of `pip freeze` into `requirements.txt`. On Linux/MacOS, it is easiest to do `pip freeze > requirements.txt`
 2. If you pull and the code has updated `requirements.txt`, you will need to install the new packages: `pip install -r requirements.txt`
