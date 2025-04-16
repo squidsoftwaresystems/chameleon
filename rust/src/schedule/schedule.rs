@@ -377,6 +377,89 @@ impl ScheduleGenerator {
         }));
     }
 
+    /// Check if the schedule for truck `truck` allows for enough breaks
+    fn allows_time_for_breaks(&mut self, schedule: &Schedule, truck: Truck) -> bool {
+        let checkpoints = schedule.truck_checkpoints.get(&truck).unwrap();
+        let starting_data = self.truck_data.get(&truck).unwrap();
+
+        // TODO: there is definitely a better way to do this
+        // This is the simplest way, though.
+
+        // 30 mins
+        let medium_break_duration = 30 * 60;
+        // 15 mins
+        let short_break_duration = 15 * 60;
+
+        // short break followed by medium break = long break
+
+        // 4.5h
+        let max_drive_duration = (4.5 * 60.0 * 60.0) as NonNegativeTimeDelta;
+
+        // We greedily add breaks as soon as a driver requires them.
+        let mut time_driven_after_long_break: NonNegativeTimeDelta = 0;
+        let mut prev_terminal = starting_data.starting_terminal;
+        // Time now, including all the breaks
+        let mut current_time = starting_data.start_time;
+        // Since we aren't specifying when the breaks occur, the case for 45min is included
+        // in the case when we take 15min break just before 30min break
+        let mut was_last_break_short = false;
+        for next_checkpoint in checkpoints.iter() {
+            let next_terminal = next_checkpoint.terminal;
+
+            // We account for pieces of driving time separately
+            let mut driving_time_left = self
+                .driving_times_cache
+                .get_driving_time(prev_terminal, next_terminal);
+
+            // While we can't reach destination in one go, go as far as we can
+            while driving_time_left + time_driven_after_long_break > max_drive_duration {
+                // This should be non-negative, since time_driven_after_long_break <= max_drive_duration
+                let time_driven_until_break = max_drive_duration - time_driven_after_long_break;
+                // Drive for `time_driven_until_break`
+                driving_time_left -= time_driven_until_break;
+                current_time += time_driven_until_break;
+
+                // We still have time left to drive, so we have to take the full break
+                assert!(driving_time_left > 0);
+                // If last break was long, need 45=long+short mins break
+                if !was_last_break_short {
+                    current_time += short_break_duration;
+                }
+                current_time += medium_break_duration;
+                was_last_break_short = false;
+                time_driven_after_long_break = 0;
+            }
+
+            // Now, we can get to the terminal in one go
+            // So, go there without breaks, and then
+            // (potentially) have a break at the terminal
+            time_driven_after_long_break += driving_time_left;
+            current_time += driving_time_left;
+
+            // Verify that we have enough time to get to this checkpoint
+            if current_time > next_checkpoint.time {
+                return false;
+            }
+
+            // Take as long of a break as we can afford at the checkpoint
+            let free_time = next_checkpoint.time + next_checkpoint.duration - current_time;
+            if free_time >= short_break_duration + medium_break_duration {
+                // We take both breaks and fully reset time
+                time_driven_after_long_break = 0;
+                was_last_break_short = false;
+            } else if free_time >= short_break_duration {
+                // We take short break
+                was_last_break_short = true;
+            }
+            // Else, the break doesn't count
+            // Skip to the end of this checkpoint
+            current_time = next_checkpoint.time + next_checkpoint.duration;
+            prev_terminal = next_terminal;
+        }
+
+        true
+    }
+
     /// Get driving time between `from` and `to`.
     /// If `from` is None, assume it is the starting terminal
     /// If `to` is None, assume that there is no restriction
@@ -615,6 +698,10 @@ impl ScheduleGenerator {
         driving_time -= time_a_to_c;
         driving_time += time_a_to_b + time_b_to_c;
         out.truck_driving_times.insert(truck, driving_time);
+
+        if !self.allows_time_for_breaks(&out, truck) {
+            return None;
+        }
 
         return Some(out);
     }
@@ -928,6 +1015,10 @@ impl ScheduleGenerator {
         }
 
         out.scheduled_cargo_truck.insert(chosen_cargo, *truck);
+
+        if !self.allows_time_for_breaks(&out, *truck) {
+            return None;
+        }
 
         return Some(out);
     }

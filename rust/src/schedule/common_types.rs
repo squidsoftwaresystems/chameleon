@@ -44,6 +44,8 @@ impl IsID for Truck {
 // TODO: maybe convert these to struct Time(u64), TimeDelta(i64)
 // and NonNegativeTimeDelta(i64)
 // to make it more fool-proof
+
+/// Time in seconds
 pub type Time = u64;
-// pub type TimeDelta = i64;
+/// Time duration in seconds
 pub type NonNegativeTimeDelta = u64;
