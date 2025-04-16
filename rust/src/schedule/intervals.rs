@@ -4,10 +4,8 @@ use std::cmp::min;
 use rand::seq::IteratorRandom;
 use rand_xoshiro::Xoshiro256PlusPlus;
 
-// TODO: convert these to struct Time(u64) and TimeDelta(i64)
-// to make it more fool-proof
-pub type Time = u64;
-pub type TimeDelta = i64;
+use super::common_types::NonNegativeTimeDelta;
+use super::common_types::Time;
 
 pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
@@ -45,7 +43,7 @@ impl<T: Clone + Eq> IntervalWithData<T> {
         self.end_time
     }
 
-    pub fn get_duration(&self) -> TimeDelta {
+    pub fn get_duration(&self) -> NonNegativeTimeDelta {
         (self.end_time - self.start_time).try_into().unwrap()
     }
 
@@ -60,17 +58,6 @@ impl<T: Clone + Eq> IntervalWithData<T> {
     pub fn random_time(&self, rng: &mut Xoshiro256PlusPlus) -> Time {
         // the interval can't be empty
         (self.start_time..self.end_time).choose(rng).unwrap()
-    }
-
-    /// Try to create a copy of self with offset start and end times.
-    /// If the result is invalid (e.g. length is non-positive), return None
-    pub fn reschedule(&self, start_change: TimeDelta, end_change: TimeDelta) -> Option<Self> {
-        Self::new(
-            // Try add start_change, return None if overflows
-            self.start_time.checked_add_signed(start_change)?,
-            self.end_time.checked_add_signed(end_change)?,
-            self.additional_data.clone(),
-        )
     }
 
     pub fn map_data<U: Eq>(&self, new_data: U) -> IntervalWithData<U> {
@@ -242,7 +229,7 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
         }
     }
 
-    pub fn total_length(&self) -> TimeDelta {
+    pub fn total_length(&self) -> NonNegativeTimeDelta {
         self.intervals
             .iter()
             .map(|interval| interval.get_duration())
