@@ -16,6 +16,7 @@ First, activate the venv: `.venv\Scripts\activate` on Windows, `source .venv/bin
 Then you can:
 - Run unit tests in `test/` folder using `pytest`
 - Rebuild the rust packages for development using `maturin develop` or for release using `maturin develop -r`.
+- For proper GDB support, instead run `RUSTFLAGS="-C link-args=-Wl,--no-gc-sections" maturin develop`
 - Compare performance of algorithms on data by running `evaluation/compare_performance.py`
 - Run algorithms by themselves by running other scripts in subfolders of `evaluation/`
 
@@ -29,6 +30,8 @@ When running and developing code, it is recommended to put the entry points into
 Please use the tests by running `pytest` and check your python types by running `mypy .`
 
 Running `pytest --pdb` also gives you access to the debugger
+
+If the module caches test data (such as `schedule.py` caching e.g. driving times and processed API data), then if you are changing the format of stored data, please remember to clear the cache by deleting `.pkl` files under `data/` to avoid issues with new code using cache with old format of data.
 
 ### Adding new packages
 1. Add it to `requirements.txt` by putting output of `pip freeze` into `requirements.txt`. On Linux/MacOS, it is easiest to do `pip freeze > requirements.txt`

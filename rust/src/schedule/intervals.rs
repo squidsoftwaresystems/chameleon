@@ -1,7 +1,8 @@
 use std::cmp::max;
 use std::cmp::min;
 
-use pyo3::pyclass;
+use rand::seq::IteratorRandom;
+use rand_xoshiro::Xoshiro256PlusPlus;
 
 // TODO: convert these to struct Time(u64) and TimeDelta(i64)
 // to make it more fool-proof
@@ -11,7 +12,8 @@ pub type TimeDelta = i64;
 pub type Interval = IntervalWithData<()>;
 pub type IntervalChain = IntervalWithDataChain<()>;
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord)]
+/// A non-empty interval of time
 pub struct IntervalWithData<T>
 where
     T: Eq,
@@ -36,19 +38,28 @@ impl<T: Clone + Eq> IntervalWithData<T> {
     }
 
     pub fn get_start_time(&self) -> Time {
-        return self.start_time;
+        self.start_time
     }
 
     pub fn get_end_time(&self) -> Time {
-        return self.end_time;
+        self.end_time
     }
 
     pub fn get_duration(&self) -> TimeDelta {
-        return (self.end_time - self.start_time).try_into().unwrap();
+        (self.end_time - self.start_time).try_into().unwrap()
     }
 
     pub fn get_additional_data(&self) -> &T {
-        return &self.additional_data;
+        &self.additional_data
+    }
+
+    pub fn get_additional_data_mut(&mut self) -> &mut T {
+        &mut self.additional_data
+    }
+
+    pub fn random_time(&self, rng: &mut Xoshiro256PlusPlus) -> Time {
+        // the interval can't be empty
+        (self.start_time..self.end_time).choose(rng).unwrap()
     }
 
     /// Try to create a copy of self with offset start and end times.
@@ -62,17 +73,21 @@ impl<T: Clone + Eq> IntervalWithData<T> {
         )
     }
 
-    pub fn remove_additional_data(&self) -> Interval {
-        Interval {
+    pub fn map_data<U: Eq>(&self, new_data: U) -> IntervalWithData<U> {
+        IntervalWithData {
             start_time: self.start_time,
             end_time: self.end_time,
-            additional_data: (),
+            additional_data: new_data,
         }
+    }
+
+    pub fn remove_additional_data(&self) -> Interval {
+        self.map_data(())
     }
 }
 
 /// A list of non-overlapping intervals in an increasing order
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntervalWithDataChain<T>
 where
     T: Eq,
@@ -95,6 +110,7 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
     pub fn from_intervals(intervals: Vec<IntervalWithData<T>>) -> Self {
         IntervalWithDataChain { intervals }
     }
+
     /// Create an IntervalChain that is the intersection of two IntervalChains,
     /// that is sub-intervals occurring in both. Keeps additional information of `self`
     pub fn intersect<U: Eq>(&self, other: &IntervalWithDataChain<U>) -> IntervalWithDataChain<T> {
@@ -189,6 +205,10 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
         return &self.intervals;
     }
 
+    pub fn get_intervals_mut(&mut self) -> &mut Vec<IntervalWithData<T>> {
+        return &mut self.intervals;
+    }
+
     /// Remove interval at index `index`, panic if index out of bounds
     pub fn remove(&mut self, index: usize) -> IntervalWithData<T> {
         return self.intervals.remove(index);
@@ -220,5 +240,49 @@ impl<T: Clone + Eq> IntervalWithDataChain<T> {
             self.intervals.push(new);
             return true;
         }
+    }
+
+    pub fn total_length(&self) -> TimeDelta {
+        self.intervals
+            .iter()
+            .map(|interval| interval.get_duration())
+            .sum()
+    }
+
+    /// Whether the total length of the intervals is 0
+    pub fn is_empty(&self) -> bool {
+        // since the individual intervals have a positive
+        // length, the only way the total length can be 0
+        // is if there are no intervals
+        self.intervals.is_empty()
+    }
+}
+
+pub trait IntervalWithDataChainIter {
+    /// Takes an iterator of IntervalWithData and returns their intersection
+    fn intersect_all<'a, T>(self) -> IntervalChain
+    where
+        Self: Iterator<Item = &'a IntervalWithDataChain<T>> + Sized,
+        T: Clone + Eq + 'a;
+}
+
+impl<It> IntervalWithDataChainIter for It
+where
+    Self: Iterator + Sized,
+{
+    fn intersect_all<'a, T>(self) -> IntervalChain
+    where
+        Self: Iterator<Item = &'a IntervalWithDataChain<T>> + Sized,
+        T: Clone + Eq + 'a,
+    {
+        let largest_interval = Interval {
+            start_time: Time::MIN,
+            end_time: Time::MAX,
+            additional_data: (),
+        };
+        let empty_intersection = IntervalWithDataChain::from_interval(largest_interval);
+        self.fold(empty_intersection, |intervals1, intervals2| {
+            intervals1.intersect(&intervals2)
+        })
     }
 }
